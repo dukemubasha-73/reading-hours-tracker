@@ -1,0 +1,3002 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<title>Reading Hours Tracker</title>
+
+<!-- PWA / Home Screen Meta Tags -->
+<meta name="theme-color" content="#1a73e8">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Reading Hours">
+<meta name="description" content="Track your daily reading hours and build a streak.">
+
+<link rel="icon" href="icon-192.png" sizes="192x192" type="image/png">
+<link rel="icon" href="icon-512.png" sizes="512x512" type="image/png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="manifest" href="manifest.json">
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+<style>
+  :root {
+    --primary: #1a73e8;
+    --primary-dark: #1557b0;
+    --bg: #f4f6f9;
+    --card-bg: #ffffff;
+    --text: #202124;
+    --text-muted: #5f6368;
+    --border: #e3e6ea;
+    --danger: #e8483a;
+    --danger-dark: #c53c30;
+    --radius: 14px;
+  }
+
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+
+  html, body {
+    margin: 0;
+    padding: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  body {
+    display: flex;
+    justify-content: center;
+    padding: 16px;
+    padding-bottom: 40px;
+    min-height: 100vh;
+  }
+
+  .app { width: 100%; max-width: 480px; }
+
+  header { text-align: center; margin: 8px 0 20px; }
+  header h1 { font-size: 22px; font-weight: 700; margin: 0; color: var(--primary); }
+  header p { margin: 4px 0 0; font-size: 13px; color: var(--text-muted); }
+
+  .card {
+    background: var(--card-bg);
+    border-radius: var(--radius);
+    padding: 16px;
+    margin-bottom: 16px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.06), 0 1px 2px rgba(0,0,0,0.04);
+  }
+
+  .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 16px; }
+
+  .stat-box {
+    background: var(--card-bg);
+    border-radius: var(--radius);
+    padding: 14px 6px;
+    text-align: center;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.06), 0 1px 2px rgba(0,0,0,0.04);
+  }
+
+  .stat-value { font-size: 20px; font-weight: 700; color: var(--primary); line-height: 1.2; }
+  .stat-label { font-size: 11px; color: var(--text-muted); margin-top: 4px; text-transform: uppercase; letter-spacing: 0.03em; }
+  /* Small secondary line under a stat (currently used for all-time best streak) */
+  .stat-sub { font-size: 10px; color: var(--text-muted); margin-top: 3px; }
+
+  /* Streak-at-risk banner: shown after 6 PM local time if today has no
+     logged entry yet and the user has an active streak that would break. */
+  .streak-risk-banner {
+    display: none;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    background: #fef7e0;
+    color: #a15c00;
+    border: 1.5px solid #fbd97a;
+    border-radius: 10px;
+    padding: 10px 12px;
+    font-size: 12px;
+    font-weight: 600;
+    margin-bottom: 14px;
+  }
+
+  .streak-risk-banner.show { display: flex; }
+  .streak-risk-banner .icon-btn { color: #a15c00; padding: 2px 6px; flex-shrink: 0; }
+
+  /* Daily goal card: progress bar toward today's reading goal, with an
+     inline settings row (gear icon) for editing the goal. */
+  .goal-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+  .goal-title { font-size: 14px; font-weight: 700; }
+  .goal-edit-btn { color: var(--text-muted); }
+  .goal-edit-btn:active { background: #f1f3f4; }
+
+  .progress-track {
+    background: #eef1f4;
+    border-radius: 8px;
+    height: 10px;
+    overflow: hidden;
+  }
+
+  .progress-fill {
+    height: 100%;
+    width: 0%;
+    background: var(--primary);
+    border-radius: 8px;
+    transition: width 0.3s ease, background 0.2s ease;
+  }
+
+  .progress-fill.goal-complete { background: #1e8e3e; }
+
+  .goal-footer { display: flex; justify-content: space-between; font-size: 12px; color: var(--text-muted); margin-top: 6px; }
+
+  .goal-edit-row { display: none; margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--border); }
+  .goal-edit-row.show { display: block; }
+
+  .form-row { display: flex; gap: 10px; margin-bottom: 12px; }
+  .form-group { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+  label { font-size: 12px; color: var(--text-muted); margin-bottom: 6px; font-weight: 600; }
+
+  input[type="date"],
+  input[type="number"],
+  input[type="text"],
+  select {
+    border: 1.5px solid var(--border);
+    border-radius: 10px;
+    padding: 12px 10px;
+    font-size: 16px;
+    background: #fafbfc;
+    color: var(--text);
+    width: 100%;
+    outline: none;
+    transition: border-color 0.15s ease;
+    font-family: inherit;
+    -webkit-appearance: none;
+    appearance: none;
+  }
+
+  select {
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' width='18' height='18'%3E%3Cpath fill='%235f6368' d='M7 10l5 5 5-5z'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 8px center;
+    padding-right: 30px;
+  }
+
+  input[type="date"]:focus,
+  input[type="number"]:focus,
+  input[type="text"]:focus,
+  select:focus {
+    border-color: var(--primary);
+    background-color: #fff;
+  }
+
+  input[type="color"] {
+    width: 48px;
+    height: 48px;
+    padding: 3px;
+    border: 1.5px solid var(--border);
+    border-radius: 10px;
+    background: #fafbfc;
+    cursor: pointer;
+  }
+
+  button { cursor: pointer; border: none; font-family: inherit; }
+
+  .btn-primary {
+    width: 100%;
+    background: var(--primary);
+    color: #fff;
+    font-size: 16px;
+    font-weight: 600;
+    padding: 13px;
+    border-radius: 10px;
+    transition: background 0.15s ease, transform 0.1s ease;
+  }
+
+  .btn-primary:active { background: var(--primary-dark); transform: scale(0.98); }
+
+  .form-actions { display: flex; gap: 10px; }
+  .form-actions .btn-primary { flex: 2; }
+
+  .btn-cancel {
+    flex: 1;
+    background: #f1f3f4;
+    color: var(--text-muted);
+    font-size: 15px;
+    font-weight: 600;
+    padding: 13px;
+    border-radius: 10px;
+  }
+
+  .btn-cancel:active { background: #e3e6ea; }
+
+  .edit-banner {
+    display: none;
+    align-items: center;
+    gap: 6px;
+    background: #e8f0fe;
+    color: var(--primary);
+    font-size: 12px;
+    font-weight: 600;
+    padding: 8px 10px;
+    border-radius: 8px;
+    margin-bottom: 12px;
+  }
+
+  .edit-banner.show { display: flex; }
+
+  .chart-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+  .chart-header h2 { font-size: 15px; margin: 0; font-weight: 700; }
+  .chart-header span { font-size: 12px; color: var(--text-muted); }
+
+  .range-selector { display: flex; gap: 8px; margin-bottom: 12px; }
+
+  .range-btn {
+    flex: 1;
+    background: #f1f3f4;
+    color: var(--text-muted);
+    font-size: 12px;
+    font-weight: 600;
+    padding: 8px 4px;
+    border-radius: 8px;
+    transition: background 0.15s ease, color 0.15s ease;
+  }
+
+  .range-btn.active { background: var(--primary); color: #fff; }
+
+  /* Chart type toggle: segmented pill control, visually distinct from the
+     range-selector row above it but sharing the same color language. */
+  .chart-type-selector {
+    display: flex;
+    gap: 4px;
+    background: #f1f3f4;
+    border-radius: 999px;
+    padding: 4px;
+    margin-bottom: 12px;
+  }
+
+  .chart-type-btn {
+    flex: 1;
+    background: transparent;
+    color: var(--text-muted);
+    font-size: 12px;
+    font-weight: 600;
+    padding: 8px 4px;
+    border-radius: 999px;
+    transition: background 0.2s ease, color 0.2s ease, transform 0.1s ease;
+  }
+
+  .chart-type-btn.active { background: var(--primary); color: #fff; box-shadow: 0 1px 3px rgba(0,0,0,0.15); }
+  .chart-type-btn:active { transform: scale(0.97); }
+
+  .chart-wrap { position: relative; height: 220px; }
+
+  /* Fade the canvas briefly while swapping chart type/data so the change
+     reads as a smooth transition rather than an abrupt redraw. */
+  .chart-wrap canvas { transition: opacity 0.2s ease; }
+  .chart-wrap.chart-switching canvas { opacity: 0.25; }
+
+  /* Color legend under the chart — shows subject swatches for subjects
+     that appear in the current chart range. */
+  .chart-legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 14px;
+    margin-top: 12px;
+    padding-top: 4px;
+    justify-content: center;
+  }
+  .chart-legend:empty { display: none; }
+  .chart-legend-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    color: var(--text-muted);
+    font-weight: 600;
+  }
+  .chart-legend-swatch {
+    width: 10px;
+    height: 10px;
+    border-radius: 3px;
+    flex-shrink: 0;
+    border: 1px solid rgba(0,0,0,0.08);
+  }
+
+  .list-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+  .list-header h2 { font-size: 15px; margin: 0; font-weight: 700; }
+
+  /* ---- Subjects management ---- */
+  .subject-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 4px;
+    border-bottom: 1px solid var(--border);
+    gap: 8px;
+  }
+  .subject-row:last-child { border-bottom: none; }
+  .subject-info { display: flex; align-items: center; gap: 10px; min-width: 0; }
+  .subject-swatch {
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    flex-shrink: 0;
+    border: 1.5px solid rgba(0,0,0,0.08);
+  }
+  .subject-swatch.sm { width: 11px; height: 11px; margin-top: 2px; }
+  .subject-name { font-size: 14px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .subject-actions { display: flex; gap: 2px; flex-shrink: 0; }
+
+  .add-subject-btn {
+    width: 100%;
+    background: transparent;
+    color: var(--primary);
+    font-size: 14px;
+    font-weight: 600;
+    padding: 12px;
+    border-radius: 10px;
+    border: 1.5px dashed #cfe0fb;
+    margin-top: 8px;
+  }
+  .add-subject-btn:active { background: #e8f0fe; }
+
+  .subject-edit-row { display: none; margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--border); }
+  .subject-edit-row.show { display: block; }
+  .subject-edit-row .form-row { align-items: flex-end; }
+  .subject-edit-row .color-group { flex: 0 0 60px; }
+
+  /* ---- Day groups / sessions (All Entries) ---- */
+  .day-group { border-bottom: 1px solid var(--border); }
+  .day-group:last-child { border-bottom: none; }
+
+  .day-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 4px;
+    gap: 8px;
+  }
+  .day-header:active { background: #f8f9fa; }
+
+  .day-header-left { display: flex; align-items: center; gap: 10px; min-width: 0; }
+  .day-toggle {
+    font-size: 10px;
+    color: var(--text-muted);
+    transition: transform 0.2s ease;
+    flex-shrink: 0;
+    display: inline-block;
+  }
+  .day-toggle.expanded { transform: rotate(90deg); }
+
+  .day-date { font-size: 14px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .day-meta { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
+
+  .day-sessions { display: none; padding-left: 20px; }
+  .day-sessions.show { display: block; }
+
+  .session-row {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    padding: 10px 4px;
+    border-top: 1px dashed var(--border);
+    gap: 8px;
+  }
+
+  .session-info { display: flex; align-items: flex-start; gap: 8px; min-width: 0; }
+  .session-text { min-width: 0; }
+  .session-subject { font-size: 13px; font-weight: 600; }
+  .session-note { font-size: 12px; color: var(--text-muted); margin-top: 2px; font-style: italic; overflow-wrap: break-word; }
+  .session-right { display: flex; align-items: center; gap: 4px; flex-shrink: 0; }
+
+  .entry-hours { font-size: 12px; color: var(--text-muted); margin-top: 2px; }
+
+  .hours-badge {
+    background: #e8f0fe;
+    color: var(--primary);
+    font-weight: 700;
+    font-size: 13px;
+    padding: 5px 10px;
+    border-radius: 20px;
+    white-space: nowrap;
+  }
+
+  .icon-btn { background: transparent; font-size: 16px; padding: 6px 8px; border-radius: 8px; line-height: 1; }
+  .edit-btn { color: var(--primary); }
+  .edit-btn:active { background: #e8f0fe; }
+  .delete-btn { color: var(--danger); }
+  .delete-btn:active { background: #fdecea; }
+
+  .empty-state { text-align: center; color: var(--text-muted); font-size: 13px; padding: 24px 0; }
+
+  .clear-btn {
+    width: 100%;
+    background: transparent;
+    color: var(--danger);
+    font-size: 14px;
+    font-weight: 600;
+    padding: 12px;
+    border-radius: 10px;
+    border: 1.5px solid #f3d3cf;
+    margin-top: 4px;
+  }
+
+  .clear-btn:active { background: #fdecea; }
+
+  /* Export and Import sit side-by-side in their own row below Clear All */
+  .export-import-row { display: flex; gap: 10px; margin-top: 10px; }
+
+  .export-btn {
+    width: 100%;
+    background: transparent;
+    color: var(--primary);
+    font-size: 14px;
+    font-weight: 600;
+    padding: 12px;
+    border-radius: 10px;
+    border: 1.5px solid #cfe0fb;
+    margin-top: 10px;
+  }
+
+  .export-import-row .export-btn { flex: 1; margin-top: 0; }
+
+  .export-btn:active { background: #e8f0fe; }
+
+  footer { text-align: center; font-size: 11px; color: var(--text-muted); margin-top: 8px; padding-bottom: 8px; }
+
+  .storage-note {
+    font-size: 11px;
+    color: var(--text-muted);
+    text-align: center;
+    margin: 12px 0 0;
+  }
+
+  .toast {
+    position: fixed;
+    left: 50%;
+    bottom: 24px;
+    transform: translateX(-50%) translateY(20px);
+    background: #202124;
+    color: #fff;
+    font-size: 13px;
+    font-weight: 600;
+    padding: 12px 20px;
+    border-radius: 30px;
+    box-shadow: 0 4px 14px rgba(0,0,0,0.25);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.25s ease, transform 0.25s ease;
+    z-index: 999;
+    max-width: 90vw;
+    white-space: nowrap;
+  }
+
+  .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+  .toast .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--primary); flex-shrink: 0; }
+  .toast.toast-error .dot { background: var(--danger); }
+  /* Milestone badge toast (crossing an hours or streak milestone): gold dot,
+     shown a bit longer than a regular toast since it's a small celebration. */
+  .toast.toast-milestone { white-space: normal; text-align: left; max-width: 80vw; }
+  .toast.toast-milestone .dot { background: #f9ab00; }
+
+  /* Custom confirmation modal */
+  .modal-overlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.45);
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+    z-index: 1000;
+  }
+
+  .modal-overlay.show { display: flex; }
+
+  .modal-box {
+    background: var(--card-bg);
+    border-radius: var(--radius);
+    padding: 20px;
+    width: 100%;
+    max-width: 360px;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.2);
+  }
+
+  .modal-title {
+    font-size: 16px;
+    font-weight: 700;
+    margin-bottom: 8px;
+  }
+
+  .modal-text {
+    font-size: 13px;
+    color: var(--text-muted);
+    line-height: 1.5;
+    margin-bottom: 18px;
+  }
+
+  .modal-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+  .modal-actions .btn-cancel { flex: 1; }
+  /* When the optional Merge button (import flow) is visible, the two
+     action buttons share their own full-width row under Cancel so none
+     of the three labels get cramped. */
+  .modal-actions .btn-primary,
+  .modal-actions .btn-danger { flex: 1; min-width: 100px; }
+
+  .btn-danger {
+    flex: 1;
+    background: var(--danger);
+    color: #fff;
+    font-size: 15px;
+    font-weight: 600;
+    padding: 13px;
+    border-radius: 10px;
+    transition: background 0.15s ease, transform 0.1s ease;
+  }
+
+  .btn-danger:active { background: var(--danger-dark); transform: scale(0.98); }
+
+  /* ---- Built-in Timer ---- */
+  .timer-display {
+    font-size: 42px;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: 0.04em;
+    text-align: center;
+    color: var(--primary);
+    padding: 12px 0 16px;
+    font-family: "SF Mono", "Menlo", "Consolas", "Roboto Mono", monospace;
+    line-height: 1.1;
+  }
+
+  .timer-display.running { color: #1e8e3e; }
+  .timer-display.paused { color: #f9ab00; }
+
+  .timer-controls {
+    display: flex;
+    gap: 8px;
+    margin-top: 4px;
+  }
+
+  .timer-controls .timer-btn {
+    flex: 1;
+    padding: 13px 8px;
+    font-size: 15px;
+    font-weight: 600;
+    border-radius: 10px;
+    transition: background 0.15s ease, transform 0.1s ease;
+  }
+
+  .timer-controls .timer-btn:active { transform: scale(0.98); }
+
+  .timer-status {
+    text-align: center;
+    font-size: 12px;
+    color: var(--text-muted);
+    margin-top: 8px;
+    min-height: 16px;
+  }
+</style>
+</head>
+<body>
+
+<div class="app">
+
+  <header>
+    <h1>📖 Reading Hours Tracker</h1>
+    <p>Log study sessions by subject and build your streak</p>
+  </header>
+
+  <!-- Shown only after 6 PM local time when today has no entry yet and the
+       user has an active streak that would break at midnight. Dismissible
+       for the rest of the day via sessionStorage. -->
+  <div class="streak-risk-banner" id="streakRiskBanner">
+    <span id="streakRiskText"></span>
+    <button class="icon-btn" id="streakRiskDismiss" aria-label="Dismiss">✕</button>
+  </div>
+
+  <div class="stats">
+    <div class="stat-box">
+      <div class="stat-value" id="statTotal">0</div>
+      <div class="stat-label">Total Hrs</div>
+    </div>
+    <div class="stat-box">
+      <div class="stat-value" id="statAvg">0</div>
+      <div class="stat-label">Avg / Day</div>
+    </div>
+    <div class="stat-box">
+      <div class="stat-value" id="statStreak">0</div>
+      <div class="stat-label">Day Streak</div>
+      <div class="stat-sub" id="statBestStreak">Best: 0</div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="goal-header">
+      <span class="goal-title">🎯 Today's Goal</span>
+      <button class="icon-btn goal-edit-btn" id="goalEditBtn" aria-label="Edit daily goal">⚙️</button>
+    </div>
+    <div class="progress-track">
+      <div class="progress-fill" id="goalProgressFill"></div>
+    </div>
+    <div class="goal-footer">
+      <span id="goalProgressLabel">0m / 1h</span>
+      <span id="goalProgressPct">0%</span>
+    </div>
+    <div class="goal-edit-row" id="goalEditRow">
+      <div class="form-row">
+        <div class="form-group">
+          <label for="goalInput">Daily goal (hours)</label>
+          <input type="number" id="goalInput" step="0.25" min="0.25" max="24" placeholder="1.0">
+        </div>
+      </div>
+      <div class="form-actions">
+        <button class="btn-cancel" id="goalCancelBtn">Cancel</button>
+        <button class="btn-primary" id="goalSaveBtn">Save Goal</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Subjects: users can create/edit/delete subjects, each with a name and
+       a custom color. Subjects power the "Subject" field on every session. -->
+  <div class="card">
+    <div class="list-header">
+      <h2>📚 Subjects</h2>
+    </div>
+    <div id="subjectsList"></div>
+    <button class="add-subject-btn" id="addSubjectBtn">+ Add Subject</button>
+    <div class="subject-edit-row" id="subjectEditRow">
+      <div class="form-row">
+        <div class="form-group">
+          <label for="subjectNameInput">Name</label>
+          <input type="text" id="subjectNameInput" maxlength="40" placeholder="e.g. Chemistry">
+        </div>
+        <div class="form-group color-group">
+          <label for="subjectColorInput">Color</label>
+          <input type="color" id="subjectColorInput" value="#1a73e8">
+        </div>
+      </div>
+      <div class="form-actions">
+        <button class="btn-cancel" id="subjectCancelBtn">Cancel</button>
+        <button class="btn-primary" id="subjectSaveBtn">Save Subject</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Built-in Timer: uses real timestamps so it stays accurate when the
+       tab is backgrounded or the screen is locked. On Stop it creates a
+       session for today (minimum 1 minute). -->
+  <div class="card" id="timerCard">
+    <div class="list-header">
+      <h2>⏱️ Timer</h2>
+    </div>
+    <div class="timer-display" id="timerDisplay">00:00:00</div>
+    <div class="form-row">
+      <div class="form-group">
+        <label for="timerSubjectSelect">Subject</label>
+        <select id="timerSubjectSelect"></select>
+      </div>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label for="timerNoteInput">Note <span style="font-weight:400;">(optional)</span></label>
+        <input type="text" id="timerNoteInput" maxlength="200" placeholder="What are you studying?">
+      </div>
+    </div>
+    <div class="timer-controls">
+      <button class="btn-primary timer-btn" id="timerStartBtn">Start</button>
+      <button class="btn-cancel timer-btn" id="timerPauseBtn" style="display:none;">Pause</button>
+      <button class="btn-primary timer-btn" id="timerResumeBtn" style="display:none;">Resume</button>
+      <button class="btn-danger timer-btn" id="timerStopBtn" style="display:none;">Stop</button>
+    </div>
+    <div class="timer-status" id="timerStatus"></div>
+  </div>
+
+  <div class="card">
+    <div class="edit-banner" id="editBanner">Editing session — make changes and save</div>
+    <div class="form-row">
+      <div class="form-group">
+        <label for="dateInput">Date</label>
+        <input type="date" id="dateInput" min="2020-01-01">
+      </div>
+      <div class="form-group">
+        <label for="hoursInput">Hours</label>
+        <input type="number" id="hoursInput" step="0.25" min="0" max="24" placeholder="0.0">
+      </div>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label for="subjectSelectInput">Subject</label>
+        <select id="subjectSelectInput"></select>
+      </div>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label for="noteInput">Note <span style="font-weight:400;">(optional)</span></label>
+        <input type="text" id="noteInput" maxlength="200" placeholder="e.g. Project Hail Mary, ch. 4">
+      </div>
+    </div>
+
+    <button class="btn-primary" id="addBtn">Add Session</button>
+
+    <div class="form-actions" id="editActions" style="display:none;">
+      <button class="btn-cancel" id="cancelEditBtn">Cancel</button>
+      <button class="btn-primary" id="saveEditBtn">Save Changes</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="chart-header">
+      <h2 id="chartTitle">Last 14 Days</h2>
+      <span id="chartRange"></span>
+    </div>
+
+    <div class="chart-type-selector" id="chartTypeSelector">
+      <button class="chart-type-btn" data-chart-type="bar">📊 Bar Chart</button>
+      <button class="chart-type-btn" data-chart-type="line">📈 Line Chart</button>
+    </div>
+
+    <div class="range-selector">
+      <button class="range-btn" data-range="7">7 Days</button>
+      <button class="range-btn active" data-range="14">14 Days</button>
+      <button class="range-btn" data-range="30">30 Days</button>
+    </div>
+
+    <div class="chart-wrap" id="chartWrap">
+      <canvas id="readingChart"></canvas>
+    </div>
+    <div class="chart-legend" id="chartLegend"></div>
+  </div>
+
+  <div class="card">
+    <div class="list-header">
+      <h2>All Entries</h2>
+      <span id="entryCount" style="font-size:12px;color:var(--text-muted);"></span>
+    </div>
+    <div id="entriesList"></div>
+    <button class="clear-btn" id="clearBtn">Clear All Data</button>
+    <div class="export-import-row">
+      <button class="export-btn" id="exportBtn">Export Data</button>
+      <button class="export-btn" id="importBtn">Import Data</button>
+    </div>
+    <!-- Hidden native file picker triggered by the Import Data button above -->
+    <input type="file" id="importFile" accept=".json,.csv,application/json,text/csv" style="display:none">
+    <div class="export-import-row" id="autoSaveRow" style="margin-top:8px;">
+      <button class="export-btn" id="linkFileBtn">Link File for Auto-Save</button>
+    </div>
+    <p class="storage-note" id="autoSaveStatus">Not linked — using browser storage only</p>
+    <p class="storage-note">🔒 Stored only on this device/browser — not synced or backed up elsewhere.</p>
+  </div>
+
+  <footer>Data is stored only on this device.</footer>
+
+</div>
+
+<div class="toast" id="toast"><span class="dot"></span><span id="toastMsg"></span></div>
+
+<!-- Custom confirmation modal (replaces native confirm(), which is
+     unreliable inside standalone/home-screen PWAs and some in-app browsers).
+     Reused for "Clear All Data", "delete session", "delete subject" and
+     import prompts — its title/text/button label are set dynamically in JS. -->
+<div class="modal-overlay" id="confirmOverlay">
+  <div class="modal-box" id="modalBox" role="dialog" aria-modal="true" aria-labelledby="modalTitle" tabindex="-1">
+    <div class="modal-title" id="modalTitle">Clear all data?</div>
+    <div class="modal-text" id="modalText">This will permanently delete all your reading history. This cannot be undone.</div>
+    <div class="modal-actions">
+      <button class="btn-cancel" id="modalCancelBtn">Cancel</button>
+      <!-- Only shown for the "Import data" prompt, as a third choice
+           alongside Cancel and the primary confirm button (Replace All). -->
+      <button class="btn-primary" id="modalMergeBtn" style="display:none;">Merge</button>
+      <button class="btn-danger" id="modalConfirmBtn">Delete All</button>
+    </div>
+  </div>
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  // ---------------------------------------------------------------------
+  // Storage keys
+  // ---------------------------------------------------------------------
+  const SUBJECTS_KEY = "readingHoursSubjects";
+  const DELETED_SUBJECTS_KEY = "readingHoursDeletedSubjects";
+  const SESSIONS_KEY = "readingHoursSessionsV2";
+  const MIGRATION_FLAG_KEY = "readingHoursMigratedToSessionsV2";
+
+  // Legacy (pre-subjects) keys — read only, used to migrate old data on
+  // first load under the new model. Never written to again after that.
+  const LEGACY_DATA_KEY = "readingHoursData";
+  const LEGACY_TITLES_KEY = "readingHoursTitles";
+
+  const GOAL_KEY = "readingHoursGoal";
+  const DEFAULT_GOAL_HOURS = 1;
+  // Which milestones have already triggered a badge toast, so the same
+  // milestone never fires twice (e.g. after editing entries back and forth).
+  const MILESTONES_KEY = "readingHoursMilestonesAwarded";
+  const TOTAL_HOUR_MILESTONES = [10, 50, 100, 250];
+  const STREAK_DAY_MILESTONES = [7, 30, 100];
+  // Remembers whether the user prefers the bar or line chart style.
+  const CHART_TYPE_KEY = "readingHoursChartType";
+  const VALID_CHART_TYPES = ["bar", "line"];
+  const DEFAULT_CHART_TYPE = "bar";
+
+  // Fallback color used when a session's subject has been deleted.
+  const NEUTRAL_COLOR = "#9aa0a6";
+
+  const DEFAULT_SUBJECTS = [
+    { id: "default-math", name: "Math", color: "#4285F4" },
+    { id: "default-physics", name: "Physics", color: "#AB47BC" },
+    { id: "default-reading", name: "Reading", color: "#26A69A" },
+    { id: "default-history", name: "History", color: "#FF7043" },
+    { id: "default-english", name: "English", color: "#66BB6A" }
+  ];
+
+  const NICE_COLOR_PALETTE = ["#4285F4", "#AB47BC", "#26A69A", "#FF7043", "#66BB6A", "#EC407A", "#7E57C2", "#FFCA28", "#42A5F5", "#8D6E63"];
+
+  function randomNiceColor() {
+    return NICE_COLOR_PALETTE[Math.floor(Math.random() * NICE_COLOR_PALETTE.length)];
+  }
+
+  function generateId() {
+    return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+  }
+
+  // ---------------------------------------------------------------------
+  // Persistence helpers
+  // ---------------------------------------------------------------------
+  function loadSubjects() {
+    try {
+      const raw = localStorage.getItem(SUBJECTS_KEY);
+      if (raw) return JSON.parse(raw);
+    } catch (e) {
+      console.error("Failed to parse stored subjects, resetting.", e);
+    }
+    const defaults = DEFAULT_SUBJECTS.map(function (s) { return Object.assign({}, s); });
+    saveSubjects(defaults);
+    return defaults;
+  }
+
+  function saveSubjects(list) {
+    localStorage.setItem(SUBJECTS_KEY, JSON.stringify(list));
+    scheduleAutoSave();
+  }
+
+  function loadDeletedSubjects() {
+    try {
+      const raw = localStorage.getItem(DELETED_SUBJECTS_KEY);
+      return raw ? JSON.parse(raw) : {};
+    } catch (e) {
+      console.error("Failed to parse deleted subjects, resetting.", e);
+      return {};
+    }
+  }
+
+  function saveDeletedSubjects(map) {
+    localStorage.setItem(DELETED_SUBJECTS_KEY, JSON.stringify(map));
+  }
+
+  function loadSessions() {
+    try {
+      const raw = localStorage.getItem(SESSIONS_KEY);
+      return raw ? JSON.parse(raw) : {};
+    } catch (e) {
+      console.error("Failed to parse stored sessions, resetting.", e);
+      return {};
+    }
+  }
+
+  function saveSessions(data) {
+    localStorage.setItem(SESSIONS_KEY, JSON.stringify(data));
+    scheduleAutoSave();
+  }
+
+  function loadGoalHours() {
+    const raw = localStorage.getItem(GOAL_KEY);
+    const val = parseFloat(raw);
+    // Clamp to the valid range (0, 24]. Anything outside falls back / caps.
+    if (isNaN(val) || val <= 0) return DEFAULT_GOAL_HOURS;
+    if (val > 24) return 24;
+    return val;
+  }
+
+  function saveGoalHours(hours) {
+    localStorage.setItem(GOAL_KEY, String(hours));
+    scheduleAutoSave();
+  }
+
+  function loadChartType() {
+    const raw = localStorage.getItem(CHART_TYPE_KEY);
+    return VALID_CHART_TYPES.indexOf(raw) !== -1 ? raw : DEFAULT_CHART_TYPE;
+  }
+
+  function saveChartType(type) {
+    localStorage.setItem(CHART_TYPE_KEY, type);
+  }
+
+  // One-time migration: converts any old single-number-per-day entries
+  // (readingHoursData / readingHoursTitles) into a single session per day
+  // under the new multi-session model. Runs at most once, ever.
+  function migrateLegacyDataIfNeeded() {
+    if (localStorage.getItem(MIGRATION_FLAG_KEY)) return;
+
+    let legacyData = {};
+    let legacyTitles = {};
+    try { legacyData = JSON.parse(localStorage.getItem(LEGACY_DATA_KEY) || "{}"); } catch (e) { legacyData = {}; }
+    try { legacyTitles = JSON.parse(localStorage.getItem(LEGACY_TITLES_KEY) || "{}"); } catch (e) { legacyTitles = {}; }
+
+    // Prefer the "Reading" default subject for migrated entries, since this
+    // app started life as a reading-only tracker; fall back to whatever
+    // subject happens to be first if that default isn't present.
+    const preferred = subjects.find(function (s) { return s.id === "default-reading"; }) || subjects[0];
+
+    if (preferred) {
+      Object.keys(legacyData).forEach(function (date) {
+        const hours = parseFloat(legacyData[date]);
+        if (isNaN(hours) || hours <= 0) return;
+        if (!sessionsData[date]) sessionsData[date] = [];
+        sessionsData[date].push({
+          id: generateId(),
+          subjectId: preferred.id,
+          hours: roundTo(hours, 2),
+          note: legacyTitles[date] ? String(legacyTitles[date]).slice(0, 200) : "",
+          createdAt: Date.now()
+        });
+      });
+      saveSessions(sessionsData);
+    }
+
+    localStorage.setItem(MIGRATION_FLAG_KEY, "1");
+  }
+
+  // On first run under this feature, silently treat any milestones already
+  // met by existing history as "awarded" so upgrading doesn't immediately
+  // dump a pile of celebration toasts for progress that already happened.
+  function loadMilestones() {
+    try {
+      const raw = localStorage.getItem(MILESTONES_KEY);
+      if (raw) return JSON.parse(raw);
+    } catch (e) {
+      console.error("Failed to parse stored milestones, resetting.", e);
+    }
+    const stats = computeStats();
+    const initial = {
+      total: TOTAL_HOUR_MILESTONES.filter(function (t) { return stats.total >= t; }),
+      streak: STREAK_DAY_MILESTONES.filter(function (t) { return stats.streak >= t; })
+    };
+    saveMilestones(initial);
+    return initial;
+  }
+
+  function saveMilestones(milestones) {
+    localStorage.setItem(MILESTONES_KEY, JSON.stringify(milestones));
+  }
+
+  // ---------------------------------------------------------------------
+  // State
+  // ---------------------------------------------------------------------
+  let subjects = loadSubjects();
+  let deletedSubjects = loadDeletedSubjects();
+  let sessionsData = loadSessions();
+  migrateLegacyDataIfNeeded();
+
+  let goalHours = loadGoalHours();
+  let editingSession = null;    // { date, id } | null
+  let editingSubjectId = null;  // subject id being edited, or null when adding
+  let currentRange = 14;
+  let currentChartType = loadChartType();
+  let expandedDates = new Set();
+  // Populated after computeStats() is defined below (function declarations
+  // are hoisted, so calling it here from loadMilestones() is safe).
+  let milestonesAwarded = loadMilestones();
+
+  // ---------------------------------------------------------------------
+  // DOM references
+  // ---------------------------------------------------------------------
+  const dateInput = document.getElementById("dateInput");
+  const hoursInput = document.getElementById("hoursInput");
+  const subjectSelectInput = document.getElementById("subjectSelectInput");
+  const noteInput = document.getElementById("noteInput");
+  const addBtn = document.getElementById("addBtn");
+  const editActions = document.getElementById("editActions");
+  const saveEditBtn = document.getElementById("saveEditBtn");
+  const cancelEditBtn = document.getElementById("cancelEditBtn");
+  const editBanner = document.getElementById("editBanner");
+  const clearBtn = document.getElementById("clearBtn");
+  const exportBtn = document.getElementById("exportBtn");
+  const importBtn = document.getElementById("importBtn");
+  const importFile = document.getElementById("importFile");
+  const linkFileBtn = document.getElementById("linkFileBtn");
+  const autoSaveRow = document.getElementById("autoSaveRow");
+  const autoSaveStatusEl = document.getElementById("autoSaveStatus");
+  const entriesList = document.getElementById("entriesList");
+  const entryCount = document.getElementById("entryCount");
+  const chartRange = document.getElementById("chartRange");
+  const chartTitle = document.getElementById("chartTitle");
+  const rangeButtons = document.querySelectorAll(".range-btn");
+  const chartTypeButtons = document.querySelectorAll(".chart-type-btn");
+  const chartWrap = document.getElementById("chartWrap");
+  const toast = document.getElementById("toast");
+  const toastMsg = document.getElementById("toastMsg");
+  const confirmOverlay = document.getElementById("confirmOverlay");
+  const modalBox = document.getElementById("modalBox");
+  const modalTitle = document.getElementById("modalTitle");
+  const modalText = document.getElementById("modalText");
+  const modalCancelBtn = document.getElementById("modalCancelBtn");
+  const modalMergeBtn = document.getElementById("modalMergeBtn");
+  const modalConfirmBtn = document.getElementById("modalConfirmBtn");
+
+  // Timer DOM
+  const timerDisplay = document.getElementById("timerDisplay");
+  const timerSubjectSelect = document.getElementById("timerSubjectSelect");
+  const timerNoteInput = document.getElementById("timerNoteInput");
+  const timerStartBtn = document.getElementById("timerStartBtn");
+  const timerPauseBtn = document.getElementById("timerPauseBtn");
+  const timerResumeBtn = document.getElementById("timerResumeBtn");
+  const timerStopBtn = document.getElementById("timerStopBtn");
+  const timerStatus = document.getElementById("timerStatus");
+
+  const statTotal = document.getElementById("statTotal");
+  const statAvg = document.getElementById("statAvg");
+  const statStreak = document.getElementById("statStreak");
+  const statBestStreak = document.getElementById("statBestStreak");
+
+  const streakRiskBanner = document.getElementById("streakRiskBanner");
+  const streakRiskText = document.getElementById("streakRiskText");
+  const streakRiskDismiss = document.getElementById("streakRiskDismiss");
+
+  const goalEditBtn = document.getElementById("goalEditBtn");
+  const goalEditRow = document.getElementById("goalEditRow");
+  const goalInput = document.getElementById("goalInput");
+  const goalSaveBtn = document.getElementById("goalSaveBtn");
+  const goalCancelBtn = document.getElementById("goalCancelBtn");
+  const goalProgressFill = document.getElementById("goalProgressFill");
+  const goalProgressLabel = document.getElementById("goalProgressLabel");
+  const goalProgressPct = document.getElementById("goalProgressPct");
+
+  const subjectsList = document.getElementById("subjectsList");
+  const addSubjectBtn = document.getElementById("addSubjectBtn");
+  const subjectEditRow = document.getElementById("subjectEditRow");
+  const subjectNameInput = document.getElementById("subjectNameInput");
+  const subjectColorInput = document.getElementById("subjectColorInput");
+  const subjectSaveBtn = document.getElementById("subjectSaveBtn");
+  const subjectCancelBtn = document.getElementById("subjectCancelBtn");
+
+  // ---------------------------------------------------------------------
+  // Date / formatting helpers
+  // ---------------------------------------------------------------------
+  function toISODate(d) {
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, "0");
+    const day = String(d.getDate()).padStart(2, "0");
+    return y + "-" + m + "-" + day;
+  }
+
+  // Parses a "YYYY-MM-DD" string into a local Date at midnight. Used
+  // wherever we need to compare or diff calendar dates (streaks, chart
+  // range anchoring, CSV/JSON import validation).
+  function parseISODate(isoStr) {
+    const parts = isoStr.split("-").map(Number);
+    return new Date(parts[0], parts[1] - 1, parts[2]);
+  }
+
+  function isValidDateStr(str) {
+    return typeof str === "string" && /^\d{4}-\d{2}-\d{2}$/.test(str);
+  }
+
+  // Keeps the date input within a sensible window: no earlier than 2020,
+  // and no more than 7 days into the future. Called on load and whenever
+  // the page becomes visible again (in case the system date changed).
+  function updateDateInputBounds() {
+    const today = new Date();
+    const maxDate = new Date(today);
+    maxDate.setDate(maxDate.getDate() + 7);
+    dateInput.min = "2020-01-01";
+    dateInput.max = toISODate(maxDate);
+  }
+
+  function formatDisplayDate(isoStr) {
+    const todayStr = toISODate(new Date());
+    const yesterday = new Date();
+    yesterday.setDate(yesterday.getDate() - 1);
+    const yesterdayStr = toISODate(yesterday);
+
+    if (isoStr === todayStr) return "Today";
+    if (isoStr === yesterdayStr) return "Yesterday";
+
+    const dt = parseISODate(isoStr);
+    return dt.toLocaleDateString(undefined, {
+      weekday: "short",
+      month: "short",
+      day: "numeric",
+      year: "numeric"
+    });
+  }
+
+  // Formats a number of minutes as a compact "1h 15m" / "45m" / "2h" string,
+  // used in the daily goal progress line.
+  function formatMinutesShort(totalMinutes) {
+    const rounded = Math.round(totalMinutes);
+    const h = Math.floor(rounded / 60);
+    const m = rounded % 60;
+    if (h === 0) return m + "m";
+    if (m === 0) return h + "h";
+    return h + "h " + m + "m";
+  }
+
+  function roundTo(num, decimals) {
+    const factor = Math.pow(10, decimals);
+    return Math.round(num * factor) / factor;
+  }
+
+  // Initialise date input to today and apply min/max bounds.
+  updateDateInputBounds();
+  dateInput.value = toISODate(new Date());
+
+  // Escapes any string before it is inserted into innerHTML, so that
+  // values pulled from storage (which could in theory be tampered with
+  // outside the app, e.g. via devtools) can never be interpreted as
+  // markup. Defense-in-depth on top of the native input constraints.
+  function escapeHtml(str) {
+    return String(str)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#39;");
+  }
+
+  let toastTimer = null;
+
+  function showToast(message, isError) {
+    toastMsg.textContent = message;
+    toast.classList.add("show");
+    toast.classList.toggle("toast-error", !!isError);
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(function () {
+      toast.classList.remove("show");
+    }, 2200);
+  }
+
+  // ---------------------------------------------------------------------
+  // Subjects
+  // ---------------------------------------------------------------------
+
+  // Resolves a subjectId to display info. Falls back to the archived
+  // (deleted) subject's name with a neutral color, or an "Unknown" label
+  // if even the archive doesn't have it (e.g. corrupted data).
+  function resolveSubject(subjectId) {
+    for (let i = 0; i < subjects.length; i++) {
+      if (subjects[i].id === subjectId) return { name: subjects[i].name, color: subjects[i].color, deleted: false };
+    }
+    if (deletedSubjects[subjectId]) {
+      return { name: deletedSubjects[subjectId].name, color: NEUTRAL_COLOR, deleted: true };
+    }
+    return { name: "Unknown subject", color: NEUTRAL_COLOR, deleted: true };
+  }
+
+  // Fills both subject <select>s (manual entry + timer) with all active
+  // subjects. If selectedId belongs to a deleted subject, an extra option
+  // is added so the select can still display/keep that value (only relevant
+  // while editing an old session whose subject was later deleted).
+  // Also preserves the timer's current selection even if that subject was
+  // deleted while the timer was running.
+  function populateSubjectSelect(selectedId) {
+    const prevTimerId = timerSubjectSelect.value;
+
+    let html = subjects.map(function (s) {
+      return '<option value="' + escapeHtml(s.id) + '">' + escapeHtml(s.name) + '</option>';
+    }).join("");
+
+    // Ensure any "currently selected but deleted" id appears as an option
+    // for the main form and/or the timer so the value is not silently lost.
+    function ensureDeletedOption(id) {
+      if (!id || subjects.some(function (s) { return s.id === id; })) return;
+      if (html.indexOf('value="' + escapeHtml(id) + '"') !== -1) return;
+      const info = resolveSubject(id);
+      html = '<option value="' + escapeHtml(id) + '">' + escapeHtml(info.name) + ' (deleted)</option>' + html;
+    }
+    ensureDeletedOption(selectedId);
+    ensureDeletedOption(prevTimerId);
+
+    subjectSelectInput.innerHTML = html;
+    timerSubjectSelect.innerHTML = html;
+
+    if (selectedId) {
+      subjectSelectInput.value = selectedId;
+    } else if (subjects.length) {
+      subjectSelectInput.value = subjects[0].id;
+    }
+
+    if (prevTimerId && (subjects.some(function (s) { return s.id === prevTimerId; }) || deletedSubjects[prevTimerId])) {
+      timerSubjectSelect.value = prevTimerId;
+    } else if (subjects.length) {
+      timerSubjectSelect.value = subjects[0].id;
+    }
+  }
+
+  function renderSubjectsList() {
+    if (subjects.length === 0) {
+      subjectsList.innerHTML = '<div class="empty-state">No subjects yet. Add one below.</div>';
+      return;
+    }
+
+    subjectsList.innerHTML = subjects.map(function (s) {
+      return '' +
+        '<div class="subject-row">' +
+          '<div class="subject-info">' +
+            '<span class="subject-swatch" style="background:' + escapeHtml(s.color) + '"></span>' +
+            '<span class="subject-name">' + escapeHtml(s.name) + '</span>' +
+          '</div>' +
+          '<div class="subject-actions">' +
+            '<button class="icon-btn edit-btn subject-edit-btn" data-id="' + escapeHtml(s.id) + '" aria-label="Edit subject">✎</button>' +
+            '<button class="icon-btn delete-btn subject-delete-btn" data-id="' + escapeHtml(s.id) + '" aria-label="Delete subject">✕</button>' +
+          '</div>' +
+        '</div>';
+    }).join("");
+
+    subjectsList.querySelectorAll(".subject-edit-btn").forEach(function (btn) {
+      btn.addEventListener("click", function () { startEditSubject(btn.dataset.id); });
+    });
+    subjectsList.querySelectorAll(".subject-delete-btn").forEach(function (btn) {
+      btn.addEventListener("click", function () { deleteSubject(btn.dataset.id); });
+    });
+  }
+
+  function openSubjectForm() {
+    subjectEditRow.classList.add("show");
+    subjectNameInput.focus();
+    subjectEditRow.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  }
+
+  function closeSubjectForm() {
+    subjectEditRow.classList.remove("show");
+    editingSubjectId = null;
+  }
+
+  function startEditSubject(id) {
+    const s = subjects.find(function (x) { return x.id === id; });
+    if (!s) return;
+    editingSubjectId = id;
+    subjectNameInput.value = s.name;
+    subjectColorInput.value = s.color;
+    openSubjectForm();
+  }
+
+  function saveSubjectForm() {
+    const name = subjectNameInput.value.trim();
+    const color = subjectColorInput.value || randomNiceColor();
+
+    if (!name) { showToast("Enter a subject name.", true); return; }
+
+    const wasEditing = !!editingSubjectId;
+
+    if (wasEditing) {
+      const s = subjects.find(function (x) { return x.id === editingSubjectId; });
+      if (s) { s.name = name.slice(0, 40); s.color = color; }
+    } else {
+      subjects.push({ id: generateId(), name: name.slice(0, 40), color: color });
+    }
+
+    saveSubjects(subjects);
+    closeSubjectForm();
+    renderSubjectsList();
+    populateSubjectSelect(subjectSelectInput.value);
+    renderEntriesList();
+    showToast(wasEditing ? "Subject updated" : "Subject added");
+  }
+
+  function deleteSubject(id) {
+    const s = subjects.find(function (x) { return x.id === id; });
+    if (!s) return;
+
+    openModal(
+      "Delete this subject?",
+      "\u201C" + s.name + "\u201D will be removed from your subject list. Sessions already logged under it will keep their name but show as a neutral color.",
+      "Delete",
+      function () {
+        deletedSubjects[s.id] = { name: s.name, color: s.color };
+        saveDeletedSubjects(deletedSubjects);
+        subjects = subjects.filter(function (x) { return x.id !== id; });
+        saveSubjects(subjects);
+
+        if (editingSubjectId === id) closeSubjectForm();
+
+        renderSubjectsList();
+        populateSubjectSelect(subjectSelectInput.value);
+        renderEntriesList();
+        closeModal();
+        showToast("Subject deleted");
+      }
+    );
+  }
+
+  addSubjectBtn.addEventListener("click", function () {
+    editingSubjectId = null;
+    subjectNameInput.value = "";
+    subjectColorInput.value = randomNiceColor();
+    openSubjectForm();
+  });
+
+  subjectCancelBtn.addEventListener("click", closeSubjectForm);
+  subjectSaveBtn.addEventListener("click", saveSubjectForm);
+  subjectNameInput.addEventListener("keydown", function (e) {
+    if (e.key === "Enter") saveSubjectForm();
+  });
+
+  // ---------------------------------------------------------------------
+  // Derived data: sessions -> daily totals (keeps stats/streak/chart logic
+  // working the same way it always has, just sourced from sessions).
+  // ---------------------------------------------------------------------
+  function computeDailyTotals() {
+    const totals = {};
+    Object.keys(sessionsData).forEach(function (date) {
+      const list = sessionsData[date] || [];
+      const sum = list.reduce(function (s, sess) { return s + (parseFloat(sess.hours) || 0); }, 0);
+      if (sum > 0) totals[date] = roundTo(sum, 2);
+    });
+    return totals;
+  }
+
+  // Scans the full history (not just the run ending today/yesterday) for the
+  // longest run of consecutive logged days, so "best streak" survives even
+  // after the current streak is eventually broken.
+  function computeBestStreak() {
+    const totals = computeDailyTotals();
+    const dates = Object.keys(totals)
+      .filter(function (d) { return totals[d] > 0; })
+      .sort();
+
+    if (dates.length === 0) return 0;
+
+    let best = 1;
+    let run = 1;
+    for (let i = 1; i < dates.length; i++) {
+      const diffDays = Math.round((parseISODate(dates[i]) - parseISODate(dates[i - 1])) / 86400000);
+      run = (diffDays === 1) ? run + 1 : 1;
+      if (run > best) best = run;
+    }
+    return best;
+  }
+
+  function computeStats() {
+    const totals = computeDailyTotals();
+    const dates = Object.keys(totals);
+    const total = dates.reduce(function (sum, d) { return sum + (totals[d] || 0); }, 0);
+    const avg = dates.length ? total / dates.length : 0;
+
+    let streak = 0;
+    let cursor = new Date();
+    cursor.setHours(0, 0, 0, 0);
+
+    if (!(toISODate(cursor) in totals) || totals[toISODate(cursor)] <= 0) {
+      cursor.setDate(cursor.getDate() - 1);
+    }
+
+    while (true) {
+      const key = toISODate(cursor);
+      if (totals[key] && totals[key] > 0) {
+        streak++;
+        cursor.setDate(cursor.getDate() - 1);
+      } else {
+        break;
+      }
+    }
+
+    return { total: roundTo(total, 2), avg: roundTo(avg, 2), streak: streak, best: computeBestStreak() };
+  }
+
+  function renderStats() {
+    const s = computeStats();
+    statTotal.textContent = s.total;
+    statAvg.textContent = s.avg;
+    statStreak.textContent = s.streak;
+    // Best streak is always at least as large as the current streak, since
+    // it's computed from the same underlying history.
+    statBestStreak.textContent = "Best: " + Math.max(s.best, s.streak);
+  }
+
+  // Updates the daily-goal progress bar/label to reflect today's logged
+  // hours (summed across all of today's sessions) against the configured
+  // goal.
+  function renderGoalProgress() {
+    const todayKey = toISODate(new Date());
+    const totals = computeDailyTotals();
+    const todayHours = totals[todayKey] || 0;
+    const todayMinutes = todayHours * 60;
+    const goalMinutes = goalHours * 60;
+    const pct = goalMinutes > 0 ? Math.min(100, Math.round((todayMinutes / goalMinutes) * 100)) : 0;
+
+    goalProgressFill.style.width = pct + "%";
+    goalProgressFill.classList.toggle("goal-complete", todayMinutes >= goalMinutes);
+    goalProgressLabel.textContent = formatMinutesShort(todayMinutes) + " / " + formatMinutesShort(goalMinutes);
+    goalProgressPct.textContent = pct + "%";
+  }
+
+  // Shows (or hides) the "streak at risk" banner: only relevant after 6 PM
+  // local time, when today has no entry yet, and there's an active streak
+  // (as of yesterday) that would be broken if today goes unlogged. Can be
+  // dismissed for the rest of the day via sessionStorage, so it doesn't
+  // nag repeatedly on every re-render.
+  const RISK_HOUR = 18; // 6 PM
+  const DISMISS_KEY = "streakRiskDismissedDate";
+
+  function updateStreakRiskBanner() {
+    const now = new Date();
+    const todayKey = toISODate(now);
+    const totals = computeDailyTotals();
+    const loggedToday = !!(totals[todayKey] && totals[todayKey] > 0);
+    const stats = computeStats();
+    const dismissedToday = sessionStorage.getItem(DISMISS_KEY) === todayKey;
+
+    const atRisk = now.getHours() >= RISK_HOUR && !loggedToday && stats.streak > 0 && !dismissedToday;
+
+    streakRiskBanner.classList.toggle("show", atRisk);
+    if (atRisk) {
+      streakRiskText.textContent = "⏳ Your " + stats.streak + "-day streak is at risk — log today's reading before midnight!";
+    }
+  }
+
+  // Awards a badge toast the first time the user crosses a total-hours or
+  // streak-length milestone. Each milestone only ever fires once (tracked
+  // in milestonesAwarded / localStorage), even if hours are later edited
+  // down and back up again.
+  function checkAndAwardMilestones() {
+    const stats = computeStats();
+    let message = null;
+
+    TOTAL_HOUR_MILESTONES.forEach(function (t) {
+      if (stats.total >= t && milestonesAwarded.total.indexOf(t) === -1) {
+        milestonesAwarded.total.push(t);
+        message = "🏅 Milestone reached: " + t + " total hours read!";
+      }
+    });
+
+    STREAK_DAY_MILESTONES.forEach(function (t) {
+      if (stats.streak >= t && milestonesAwarded.streak.indexOf(t) === -1) {
+        milestonesAwarded.streak.push(t);
+        message = "🔥 Milestone reached: " + t + "-day streak!";
+      }
+    });
+
+    // If more than one milestone was crossed in a single update (e.g. a
+    // large data import), every one of them is still marked as awarded
+    // above; only the last (most notable) one gets a toast, to avoid
+    // stacking multiple toasts on top of each other.
+    if (message) {
+      saveMilestones(milestonesAwarded);
+      // checkAndAwardMilestones() runs inside refreshAll(), which every
+      // caller (addEntry, saveEdit, performImport, ...) follows immediately
+      // with its own showToast("Session added"/etc.) in the same tick.
+      // Showing the milestone toast synchronously here would just get
+      // instantly clobbered by that call. Queue it instead so it appears
+      // right as the regular toast finishes fading.
+      queueMilestoneToast(message);
+    }
+  }
+
+  function queueMilestoneToast(message) {
+    setTimeout(function () { showMilestoneToast(message); }, 2400);
+  }
+
+  function showMilestoneToast(message) {
+    toastMsg.textContent = message;
+    toast.classList.remove("toast-error");
+    toast.classList.add("show", "toast-milestone");
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(function () {
+      toast.classList.remove("show", "toast-milestone");
+    }, 3600);
+  }
+
+  // ---------------------------------------------------------------------
+  // All Entries: grouped by day, expandable to show individual sessions.
+  // ---------------------------------------------------------------------
+  function renderEntriesList() {
+    const dates = Object.keys(sessionsData)
+      .filter(function (d) { return sessionsData[d] && sessionsData[d].length > 0; })
+      .sort()
+      .reverse();
+
+    const totalSessions = dates.reduce(function (sum, d) { return sum + sessionsData[d].length; }, 0);
+    entryCount.textContent = totalSessions
+      ? totalSessions + (totalSessions === 1 ? " session" : " sessions") + " · " + dates.length + (dates.length === 1 ? " day" : " days")
+      : "";
+
+    if (dates.length === 0) {
+      entriesList.innerHTML = '<div class="empty-state">No entries yet. Add your first session above.</div>';
+      return;
+    }
+
+    entriesList.innerHTML = dates.map(function (date) {
+      const sessions = sessionsData[date].slice().sort(function (a, b) { return (a.createdAt || 0) - (b.createdAt || 0); });
+      const dayTotal = roundTo(sessions.reduce(function (s, x) { return s + (parseFloat(x.hours) || 0); }, 0), 2);
+      const isExpanded = expandedDates.has(date);
+      const safeDate = escapeHtml(date);
+      const safeDisplayDate = escapeHtml(formatDisplayDate(date));
+
+      const sessionsHtml = sessions.map(function (sess) {
+        const info = resolveSubject(sess.subjectId);
+        const noteHtml = sess.note ? '<div class="session-note">📝 ' + escapeHtml(sess.note) + '</div>' : '';
+        const deletedTag = info.deleted ? ' <span style="font-weight:400;color:var(--text-muted);">(deleted)</span>' : '';
+        return '' +
+          '<div class="session-row">' +
+            '<div class="session-info">' +
+              '<span class="subject-swatch sm" style="background:' + escapeHtml(info.color) + '"></span>' +
+              '<div class="session-text">' +
+                '<div class="session-subject">' + escapeHtml(info.name) + deletedTag + '</div>' +
+                noteHtml +
+              '</div>' +
+            '</div>' +
+            '<div class="session-right">' +
+              '<span class="hours-badge">' + escapeHtml(sess.hours) + 'h</span>' +
+              '<button class="icon-btn edit-btn session-edit-btn" data-date="' + safeDate + '" data-id="' + escapeHtml(sess.id) + '" aria-label="Edit session">✎</button>' +
+              '<button class="icon-btn delete-btn session-delete-btn" data-date="' + safeDate + '" data-id="' + escapeHtml(sess.id) + '" aria-label="Delete session">✕</button>' +
+            '</div>' +
+          '</div>';
+      }).join("");
+
+      return '' +
+        '<div class="day-group">' +
+          '<div class="day-header" data-date="' + safeDate + '">' +
+            '<div class="day-header-left">' +
+              '<span class="day-toggle' + (isExpanded ? ' expanded' : '') + '">▶</span>' +
+              '<div>' +
+                '<div class="day-date">' + safeDisplayDate + '</div>' +
+                '<div class="day-meta">' + sessions.length + (sessions.length === 1 ? ' session' : ' sessions') + '</div>' +
+              '</div>' +
+            '</div>' +
+            '<span class="hours-badge">' + dayTotal + 'h</span>' +
+          '</div>' +
+          '<div class="day-sessions' + (isExpanded ? ' show' : '') + '">' + sessionsHtml + '</div>' +
+        '</div>';
+    }).join("");
+
+    entriesList.querySelectorAll(".day-header").forEach(function (el) {
+      el.addEventListener("click", function () {
+        const d = el.dataset.date;
+        if (expandedDates.has(d)) { expandedDates.delete(d); } else { expandedDates.add(d); }
+        renderEntriesList();
+      });
+    });
+    entriesList.querySelectorAll(".session-edit-btn").forEach(function (btn) {
+      btn.addEventListener("click", function (e) { e.stopPropagation(); startEditSession(btn.dataset.date, btn.dataset.id); });
+    });
+    entriesList.querySelectorAll(".session-delete-btn").forEach(function (btn) {
+      btn.addEventListener("click", function (e) { e.stopPropagation(); deleteSession(btn.dataset.date, btn.dataset.id); });
+    });
+  }
+
+  let chartInstance = null;
+  // Tracks the last chart type so we can destroy+recreate when switching
+  // between bar (stacked multi-dataset) and line (single dataset).
+  let lastRenderedChartType = null;
+
+  function getLastNDays(n) {
+    const days = [];
+
+    // Anchor the window on "today", unless the user has logged an entry
+    // dated further in the future (e.g. added tomorrow's hours in advance) —
+    // in that case, shift the window forward so that entry stays visible
+    // instead of silently falling outside the chart range.
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    let anchor = today;
+    Object.keys(sessionsData).forEach(function (dateStr) {
+      const parts = dateStr.split("-").map(Number);
+      const dt = new Date(parts[0], parts[1] - 1, parts[2]);
+      if (dt > anchor) anchor = dt;
+    });
+
+    for (let i = n - 1; i >= 0; i--) {
+      const d = new Date(anchor);
+      d.setDate(d.getDate() - i);
+      days.push(toISODate(d));
+    }
+    return days;
+  }
+
+  // For each day in the range, returns a map of subjectId -> hours (summed
+  // across sessions of that subject). Used by both stacked bars and the
+  // line-chart tooltip breakdown.
+  function computeDailySubjectBreakdown(days) {
+    const byDay = {};
+    days.forEach(function (date) {
+      const map = {};
+      const list = sessionsData[date] || [];
+      list.forEach(function (sess) {
+        const h = parseFloat(sess.hours) || 0;
+        if (h <= 0) return;
+        const sid = sess.subjectId || "_unknown";
+        map[sid] = (map[sid] || 0) + h;
+      });
+      // Round each subject total
+      Object.keys(map).forEach(function (sid) {
+        map[sid] = roundTo(map[sid], 2);
+      });
+      byDay[date] = map;
+    });
+    return byDay;
+  }
+
+  // Ordered list of subject ids that appear in the given day range, with
+  // active subjects first (in subjects-list order), then any deleted ones.
+  function getSubjectsInRange(breakdown) {
+    const used = {};
+    Object.keys(breakdown).forEach(function (date) {
+      Object.keys(breakdown[date]).forEach(function (sid) {
+        if (breakdown[date][sid] > 0) used[sid] = true;
+      });
+    });
+
+    const ordered = [];
+    subjects.forEach(function (s) {
+      if (used[s.id]) ordered.push(s.id);
+    });
+    Object.keys(used).forEach(function (sid) {
+      if (ordered.indexOf(sid) === -1) ordered.push(sid);
+    });
+    return ordered;
+  }
+
+  function renderChartLegend(subjectIds) {
+    const legendEl = document.getElementById("chartLegend");
+    if (!legendEl) return;
+
+    if (!subjectIds || subjectIds.length === 0) {
+      legendEl.innerHTML = "";
+      return;
+    }
+
+    legendEl.innerHTML = subjectIds.map(function (sid) {
+      const info = resolveSubject(sid);
+      return '' +
+        '<span class="chart-legend-item">' +
+          '<span class="chart-legend-swatch" style="background:' + escapeHtml(info.color) + '"></span>' +
+          escapeHtml(info.name) +
+        '</span>';
+    }).join("");
+  }
+
+  function renderChart() {
+    const days = getLastNDays(currentRange);
+    const totals = computeDailyTotals();
+    const breakdown = computeDailySubjectBreakdown(days);
+    const subjectIds = getSubjectsInRange(breakdown);
+
+    const labels = days.map(function (d) {
+      const parts = d.split("-").map(Number);
+      const dt = new Date(parts[0], parts[1] - 1, parts[2]);
+      return dt.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+    });
+
+    chartTitle.textContent = "Last " + currentRange + " Days";
+    chartRange.textContent = labels[0] + " - " + labels[labels.length - 1];
+
+    const ctx = document.getElementById("readingChart").getContext("2d");
+    let data;
+    let options;
+
+    if (currentChartType === "bar") {
+      // Stacked bar: one dataset per subject, colored with the subject's
+      // custom color. Days with no data for a subject get 0 (invisible).
+      const datasets = subjectIds.map(function (sid) {
+        const info = resolveSubject(sid);
+        return {
+          label: info.name,
+          data: days.map(function (d) { return (breakdown[d] && breakdown[d][sid]) || 0; }),
+          backgroundColor: info.color,
+          borderRadius: 3,
+          maxBarThickness: 28,
+          stack: "subjects"
+        };
+      });
+
+      // If nothing was studied in the range, still show an empty chart
+      // with a single zero dataset so axes render cleanly.
+      if (datasets.length === 0) {
+        datasets.push({
+          label: "Hours",
+          data: days.map(function () { return 0; }),
+          backgroundColor: "#1a73e8",
+          borderRadius: 3,
+          maxBarThickness: 28,
+          stack: "subjects"
+        });
+      }
+
+      data = { labels: labels, datasets: datasets };
+      options = {
+        responsive: true,
+        maintainAspectRatio: false,
+        interaction: { mode: "index", intersect: false },
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            callbacks: {
+              label: function (ctx) {
+                const v = ctx.parsed.y;
+                if (!v) return null; // hide zero segments
+                return ctx.dataset.label + ": " + v + "h";
+              },
+              footer: function (items) {
+                const sum = items.reduce(function (s, it) { return s + (it.parsed.y || 0); }, 0);
+                return sum > 0 ? "Total: " + roundTo(sum, 2) + "h" : "";
+              }
+            }
+          }
+        },
+        scales: {
+          x: {
+            stacked: true,
+            grid: { display: false },
+            ticks: { autoSkip: true, maxRotation: 0, minRotation: 0 }
+          },
+          y: {
+            stacked: true,
+            beginAtZero: true,
+            ticks: { precision: 0 },
+            grid: { color: "#eef1f4" }
+          }
+        }
+      };
+    } else {
+      // Line chart: single smooth line of daily totals. Tooltip shows the
+      // full subject breakdown for the hovered/tapped day.
+      const values = days.map(function (d) { return totals[d] || 0; });
+
+      data = {
+        labels: labels,
+        datasets: [{
+          label: "Total hours",
+          data: values,
+          backgroundColor: "rgba(26, 115, 232, 0.15)",
+          borderColor: "#1a73e8",
+          borderWidth: 2,
+          pointBackgroundColor: "#1a73e8",
+          pointBorderColor: "#fff",
+          pointBorderWidth: 1.5,
+          pointRadius: 3,
+          pointHoverRadius: 6,
+          fill: true,
+          tension: 0.35
+        }]
+      };
+
+      options = {
+        responsive: true,
+        maintainAspectRatio: false,
+        interaction: { mode: "index", intersect: false },
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            callbacks: {
+              // Title stays the date label (default).
+              label: function (ctx) {
+                const dayIndex = ctx.dataIndex;
+                const date = days[dayIndex];
+                const dayMap = breakdown[date] || {};
+                const total = totals[date] || 0;
+                const lines = [];
+
+                lines.push("Total: " + total + "h");
+
+                // Subject breakdown, ordered the same way as the legend.
+                subjectIds.forEach(function (sid) {
+                  const h = dayMap[sid];
+                  if (!h) return;
+                  const info = resolveSubject(sid);
+                  lines.push(info.name + ": " + h + "h");
+                });
+
+                // Chart.js joins multi-line labels with newlines when the
+                // callback returns an array.
+                return lines;
+              }
+            }
+          }
+        },
+        scales: {
+          y: {
+            beginAtZero: true,
+            ticks: { precision: 0 },
+            grid: { color: "#eef1f4" }
+          },
+          x: {
+            grid: { display: false },
+            ticks: { autoSkip: true, maxRotation: 0, minRotation: 0 }
+          }
+        }
+      };
+    }
+
+    // Destroy and recreate when switching chart type — stacked multi-dataset
+    // bar vs single-dataset line don't update cleanly in place.
+    const typeChanged = lastRenderedChartType !== null && lastRenderedChartType !== currentChartType;
+    if (chartInstance && typeChanged) {
+      chartInstance.destroy();
+      chartInstance = null;
+    }
+
+    if (chartInstance) {
+      chartInstance.config.type = currentChartType;
+      chartInstance.data = data;
+      chartInstance.options = options;
+      chartInstance.update();
+    } else {
+      chartInstance = new Chart(ctx, { type: currentChartType, data: data, options: options });
+    }
+    lastRenderedChartType = currentChartType;
+
+    renderChartLegend(subjectIds);
+  }
+
+  // Briefly fades the canvas out/in around a chart update so type switches
+  // (and, harmlessly, range switches) read as an animated transition rather
+  // than an instant redraw.
+  function renderChartAnimated() {
+    chartWrap.classList.add("chart-switching");
+    window.setTimeout(function () {
+      renderChart();
+      chartWrap.classList.remove("chart-switching");
+    }, 120);
+  }
+
+  function setActiveChartTypeButton() {
+    chartTypeButtons.forEach(function (b) {
+      b.classList.toggle("active", b.dataset.chartType === currentChartType);
+    });
+  }
+
+  rangeButtons.forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      currentRange = parseInt(btn.dataset.range, 10);
+      rangeButtons.forEach(function (b) { b.classList.remove("active"); });
+      btn.classList.add("active");
+      renderChartAnimated();
+    });
+  });
+
+  chartTypeButtons.forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      const type = btn.dataset.chartType;
+      if (type === currentChartType || VALID_CHART_TYPES.indexOf(type) === -1) return;
+      currentChartType = type;
+      saveChartType(currentChartType);
+      setActiveChartTypeButton();
+      renderChartAnimated();
+    });
+  });
+
+  setActiveChartTypeButton();
+
+  // ---------------------------------------------------------------------
+  // Core refresh
+  // ---------------------------------------------------------------------
+  function refreshAll() {
+    saveSessions(sessionsData);
+    saveSubjects(subjects);
+    saveDeletedSubjects(deletedSubjects);
+    renderStats();
+    renderSubjectsList();
+    populateSubjectSelect(subjectSelectInput.value);
+    renderEntriesList();
+    renderChart();
+    renderGoalProgress();
+    updateStreakRiskBanner();
+    checkAndAwardMilestones();
+  }
+
+  // ---------------------------------------------------------------------
+  // Built-in Timer
+  // Uses real timestamps (Date.now) so elapsed time stays accurate even
+  // when the tab is backgrounded or the device screen is locked. The
+  // display is updated with a lightweight interval; accuracy comes only
+  // from the timestamps, not from the interval itself.
+  // ---------------------------------------------------------------------
+  let timerState = "idle";          // "idle" | "running" | "paused"
+  let timerAccumulatedMs = 0;       // elapsed time stored while paused / stopped
+  let timerStartedAt = null;        // Date.now() when the current running segment began
+  let timerTickInterval = null;
+
+  function formatTimerMs(ms) {
+    const totalSec = Math.floor(ms / 1000);
+    const h = Math.floor(totalSec / 3600);
+    const m = Math.floor((totalSec % 3600) / 60);
+    const s = totalSec % 60;
+    return String(h).padStart(2, "0") + ":" +
+           String(m).padStart(2, "0") + ":" +
+           String(s).padStart(2, "0");
+  }
+
+  function getCurrentElapsedMs() {
+    if (timerState === "running" && timerStartedAt != null) {
+      return timerAccumulatedMs + (Date.now() - timerStartedAt);
+    }
+    return timerAccumulatedMs;
+  }
+
+  function updateTimerDisplay() {
+    const ms = getCurrentElapsedMs();
+    timerDisplay.textContent = formatTimerMs(ms);
+    timerDisplay.classList.toggle("running", timerState === "running");
+    timerDisplay.classList.toggle("paused", timerState === "paused");
+  }
+
+  function setTimerButtons() {
+    timerStartBtn.style.display = timerState === "idle" ? "" : "none";
+    timerPauseBtn.style.display = timerState === "running" ? "" : "none";
+    timerResumeBtn.style.display = timerState === "paused" ? "" : "none";
+    timerStopBtn.style.display = (timerState === "running" || timerState === "paused") ? "" : "none";
+
+    // Prevent changing subject while a session is being timed (note is still editable).
+    timerSubjectSelect.disabled = timerState !== "idle";
+  }
+
+  function startTimerTick() {
+    if (timerTickInterval) return;
+    timerTickInterval = setInterval(updateTimerDisplay, 250);
+  }
+
+  function stopTimerTick() {
+    if (timerTickInterval) {
+      clearInterval(timerTickInterval);
+      timerTickInterval = null;
+    }
+  }
+
+  function startTimer() {
+    if (subjects.length === 0) {
+      showToast("Add a subject first.", true);
+      return;
+    }
+    if (!timerSubjectSelect.value) {
+      showToast("Choose a subject.", true);
+      return;
+    }
+
+    // Always start a fresh segment from idle (accumulated should already
+    // be 0 after resetTimer, but zero explicitly for safety).
+    timerAccumulatedMs = 0;
+    timerState = "running";
+    timerStartedAt = Date.now();
+    timerStatus.textContent = "Running…";
+    setTimerButtons();
+    updateTimerDisplay();
+    startTimerTick();
+  }
+
+  function pauseTimer() {
+    if (timerState !== "running") return;
+    timerAccumulatedMs += Date.now() - timerStartedAt;
+    timerStartedAt = null;
+    timerState = "paused";
+    timerStatus.textContent = "Paused";
+    setTimerButtons();
+    updateTimerDisplay();
+    // Keep the tick running so the display stays frozen but UI stays responsive;
+    // or stop it — either is fine. Stopping saves a tiny bit of work.
+    stopTimerTick();
+  }
+
+  function resumeTimer() {
+    if (timerState !== "paused") return;
+    timerState = "running";
+    timerStartedAt = Date.now();
+    timerStatus.textContent = "Running…";
+    setTimerButtons();
+    updateTimerDisplay();
+    startTimerTick();
+  }
+
+  function resetTimer() {
+    stopTimerTick();
+    timerState = "idle";
+    timerAccumulatedMs = 0;
+    timerStartedAt = null;
+    timerStatus.textContent = "";
+    setTimerButtons();
+    updateTimerDisplay();
+  }
+
+  function stopTimer() {
+    // Finalize elapsed time using timestamps.
+    const elapsedMs = getCurrentElapsedMs();
+    const MIN_MS = 60 * 1000; // 1 minute
+
+    if (elapsedMs < MIN_MS) {
+      showToast("Session too short — need at least 1 minute.", true);
+      resetTimer();
+      return;
+    }
+
+    const hours = roundTo(elapsedMs / 3600000, 2);
+    const subjectId = timerSubjectSelect.value;
+    const note = timerNoteInput.value.trim();
+    const today = toISODate(new Date());
+
+    if (!subjectId) {
+      // Subject select is locked while the timer runs; if the value was
+      // somehow lost (e.g. every subject deleted), reset so the user is
+      // not stuck unable to change subject or save.
+      showToast("Choose a subject.", true);
+      resetTimer();
+      return;
+    }
+
+    // Match the manual entry limit so a long-running timer cannot create
+    // an unrealistic single-day total.
+    if (hours > 24) {
+      showToast("Hours can't exceed 24 in a single day.", true);
+      resetTimer();
+      return;
+    }
+
+    if (!sessionsData[today]) sessionsData[today] = [];
+    sessionsData[today].push({
+      id: generateId(),
+      subjectId: subjectId,
+      hours: hours,
+      note: note ? note.slice(0, 200) : "",
+      createdAt: Date.now()
+    });
+
+    expandedDates.add(today);
+
+    // Clear the note so the next timed session starts clean; keep subject.
+    timerNoteInput.value = "";
+    resetTimer();
+    refreshAll();
+    showToast("Session saved (" + hours + "h)");
+  }
+
+  timerStartBtn.addEventListener("click", startTimer);
+  timerPauseBtn.addEventListener("click", pauseTimer);
+  timerResumeBtn.addEventListener("click", resumeTimer);
+  timerStopBtn.addEventListener("click", stopTimer);
+
+  // When the page becomes visible again (tab switch / unlock), force a
+  // display refresh so any time that passed in the background is shown
+  // immediately rather than waiting for the next interval tick.
+  // Also refresh date-input bounds in case the system date changed.
+  document.addEventListener("visibilitychange", function () {
+    if (document.visibilityState === "visible") {
+      updateDateInputBounds();
+      if (timerState === "running") {
+        updateTimerDisplay();
+      }
+    }
+  });
+
+  // ---------------------------------------------------------------------
+  // Sessions: add / edit / delete
+  // ---------------------------------------------------------------------
+  function addEntry() {
+    let date = dateInput.value;
+    const hours = parseFloat(hoursInput.value);
+    const subjectId = subjectSelectInput.value;
+    const note = noteInput.value.trim();
+
+    if (!date || !isValidDateStr(date)) {
+      showToast("Please choose a valid date.", true);
+      return;
+    }
+    // Normalise to a clean local YYYY-MM-DD key (guards against browser quirks).
+    date = toISODate(parseISODate(date));
+
+    if (isNaN(hours) || hours < 0) { showToast("Enter a valid number of hours (0 or more).", true); return; }
+    if (hours > 24) { showToast("Hours can't exceed 24 in a single day.", true); return; }
+    if (subjects.length === 0) { showToast("Add a subject first.", true); return; }
+    if (!subjectId) { showToast("Choose a subject.", true); return; }
+
+    const todayStr = toISODate(new Date());
+    const isFuture = date > todayStr;
+
+    if (!sessionsData[date]) sessionsData[date] = [];
+    sessionsData[date].push({
+      id: generateId(),
+      subjectId: subjectId,
+      hours: roundTo(hours, 2),
+      note: note ? note.slice(0, 200) : "",
+      createdAt: Date.now()
+    });
+
+    // Expand today's/this date's group so the newly added session is
+    // immediately visible without an extra tap.
+    expandedDates.add(date);
+
+    hoursInput.value = "";
+    noteInput.value = "";
+    refreshAll();
+    showToast(isFuture ? "Session added (future date)" : "Session added");
+  }
+
+  function startEditSession(date, id) {
+    const list = sessionsData[date] || [];
+    const sess = list.find(function (s) { return s.id === id; });
+    if (!sess) return;
+
+    editingSession = { date: date, id: id };
+    dateInput.value = date;
+    hoursInput.value = sess.hours;
+    noteInput.value = sess.note || "";
+    populateSubjectSelect(sess.subjectId);
+
+    addBtn.style.display = "none";
+    editActions.style.display = "flex";
+    editBanner.classList.add("show");
+
+    hoursInput.focus();
+    dateInput.closest(".card").scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+
+  function exitEditMode() {
+    editingSession = null;
+    addBtn.style.display = "block";
+    editActions.style.display = "none";
+    editBanner.classList.remove("show");
+    hoursInput.value = "";
+    noteInput.value = "";
+    updateDateInputBounds();
+    dateInput.value = toISODate(new Date());
+    populateSubjectSelect(subjects.length ? subjects[0].id : null);
+  }
+
+  function saveEdit() {
+    if (!editingSession) return;
+
+    let newDate = dateInput.value;
+    const hours = parseFloat(hoursInput.value);
+    const subjectId = subjectSelectInput.value;
+    const note = noteInput.value.trim();
+
+    if (!newDate || !isValidDateStr(newDate)) {
+      showToast("Please choose a valid date.", true);
+      return;
+    }
+    // Normalise to a clean local YYYY-MM-DD key.
+    newDate = toISODate(parseISODate(newDate));
+
+    if (isNaN(hours) || hours < 0) { showToast("Enter a valid number of hours (0 or more).", true); return; }
+    if (hours > 24) { showToast("Hours can't exceed 24 in a single day.", true); return; }
+    if (!subjectId) { showToast("Choose a subject.", true); return; }
+
+    const todayStr = toISODate(new Date());
+    const isFuture = newDate > todayStr;
+
+    const oldDate = editingSession.date;
+    const id = editingSession.id;
+    const list = sessionsData[oldDate] || [];
+    const idx = list.findIndex(function (s) { return s.id === id; });
+    if (idx === -1) { exitEditMode(); return; }
+
+    const sess = list[idx];
+    sess.hours = roundTo(hours, 2);
+    sess.subjectId = subjectId;
+    sess.note = note ? note.slice(0, 200) : "";
+
+    // Multiple sessions can share a day, so moving a session to a new date
+    // never collides with anything already there — just relocate it.
+    if (newDate !== oldDate) {
+      list.splice(idx, 1);
+      if (list.length === 0) delete sessionsData[oldDate];
+      if (!sessionsData[newDate]) sessionsData[newDate] = [];
+      sessionsData[newDate].push(sess);
+      expandedDates.add(newDate);
+    }
+
+    exitEditMode();
+    refreshAll();
+    showToast(isFuture ? "Session updated (future date)" : "Session updated");
+  }
+
+  // Individual sessions require confirmation before deletion, matching the
+  // safety level of "Clear All Data" (reuses the same modal).
+  function deleteSession(date, id) {
+    const list = sessionsData[date];
+    if (!list) return;
+    const sess = list.find(function (s) { return s.id === id; });
+    if (!sess) return;
+    const info = resolveSubject(sess.subjectId);
+
+    openModal(
+      "Delete this session?",
+      "This will permanently remove the " + info.name + " session (" + sess.hours + "h) logged on " + formatDisplayDate(date) + ".",
+      "Delete",
+      function () {
+        if (editingSession && editingSession.date === date && editingSession.id === id) exitEditMode();
+
+        const idx = list.findIndex(function (s) { return s.id === id; });
+        if (idx !== -1) list.splice(idx, 1);
+        if (list.length === 0) delete sessionsData[date];
+
+        refreshAll();
+        closeModal();
+        showToast("Session deleted");
+      }
+    );
+  }
+
+  // ---------------------------------------------------------------------
+  // Modal (shared confirmation dialog)
+  // ---------------------------------------------------------------------
+  // Generic modal opener: sets the title/body text and wires the confirm
+  // button to run the given callback when tapped. An optional onCancel
+  // callback runs when the user backs out (Cancel button, backdrop tap,
+  // or Escape key) instead of confirming. Used for "Clear All Data",
+  // "delete session", "delete subject", and import prompts.
+  //
+  // An optional `secondary` config ({label, onClick}) adds a third button
+  // (Merge) between Cancel and the primary confirm button — currently only
+  // used by the "Import data" prompt, which needs Merge vs Replace All
+  // instead of a single confirm action.
+  let pendingConfirmAction = null;
+  let pendingCancelAction = null;
+  let pendingSecondaryAction = null;
+  let lastFocusedBeforeModal = null;
+
+  function getFocusableModalElements() {
+    return modalBox.querySelectorAll("button, [href], input, select, textarea, [tabindex]:not([tabindex='-1'])");
+  }
+
+  function openModal(title, text, confirmLabel, onConfirm, onCancel, secondary) {
+    modalTitle.textContent = title;
+    modalText.textContent = text;
+    modalConfirmBtn.textContent = confirmLabel;
+    pendingConfirmAction = onConfirm;
+    pendingCancelAction = onCancel || null;
+
+    if (secondary) {
+      modalMergeBtn.textContent = secondary.label;
+      modalMergeBtn.style.display = "block";
+      pendingSecondaryAction = secondary.onClick;
+    } else {
+      modalMergeBtn.style.display = "none";
+      pendingSecondaryAction = null;
+    }
+
+    lastFocusedBeforeModal = document.activeElement;
+    confirmOverlay.classList.add("show");
+
+    // Move focus into the dialog for keyboard/screen-reader users.
+    modalCancelBtn.focus();
+  }
+
+  function closeModal() {
+    confirmOverlay.classList.remove("show");
+    pendingConfirmAction = null;
+    pendingCancelAction = null;
+    pendingSecondaryAction = null;
+    modalMergeBtn.style.display = "none";
+
+    // Return focus to whatever triggered the modal.
+    if (lastFocusedBeforeModal && typeof lastFocusedBeforeModal.focus === "function") {
+      lastFocusedBeforeModal.focus();
+    }
+    lastFocusedBeforeModal = null;
+  }
+
+  // Runs the optional cancel callback (if any), then closes the modal.
+  // Wired to the Cancel button, backdrop click, and the Escape key.
+  function cancelModal() {
+    if (typeof pendingCancelAction === "function") pendingCancelAction();
+    closeModal();
+  }
+
+  function openClearModal() {
+    openModal(
+      "Clear all data?",
+      "This will permanently delete all your logged sessions. Your subjects will be kept. This cannot be undone.",
+      "Delete All",
+      performClearAllData
+    );
+  }
+
+  function performClearAllData() {
+    sessionsData = {};
+    expandedDates = new Set();
+    exitEditMode();
+    resetTimer();
+    refreshAll();
+    closeModal();
+    showToast("All data cleared");
+  }
+
+  // ---------------------------------------------------------------------
+  // Export / Import
+  // ---------------------------------------------------------------------
+  // Full-fidelity JSON payload: subjects (with colors), sessions, and goal
+  // so a re-import (or a restore from the auto-saved file) restores
+  // everything exactly. Shared by the manual "Export Data" button and the
+  // auto-save-to-file feature below.
+  function buildExportPayload() {
+    const dates = Object.keys(sessionsData).filter(function (d) {
+      return sessionsData[d] && sessionsData[d].length > 0;
+    }).sort();
+
+    const payload = {
+      version: 2,
+      exportedAt: new Date().toISOString(),
+      goalHours: goalHours,
+      subjects: subjects.map(function (s) {
+        return { id: s.id, name: s.name, color: s.color };
+      }),
+      sessions: {}
+    };
+
+    dates.forEach(function (date) {
+      payload.sessions[date] = sessionsData[date].map(function (sess) {
+        const info = resolveSubject(sess.subjectId);
+        return {
+          id: sess.id,
+          subjectId: sess.subjectId,
+          subjectName: info.name,
+          hours: sess.hours,
+          note: sess.note || "",
+          createdAt: sess.createdAt || null
+        };
+      });
+    });
+
+    return payload;
+  }
+
+  function exportData() {
+    const hasData = Object.keys(sessionsData).some(function (d) {
+      return sessionsData[d] && sessionsData[d].length > 0;
+    });
+
+    if (!hasData && subjects.length === 0) {
+      showToast("No data to export");
+      return;
+    }
+
+    const todayStr = toISODate(new Date());
+    const payload = buildExportPayload();
+    const json = JSON.stringify(payload, null, 2);
+    const blob = new Blob([json], { type: "application/json;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = "reading-hours-" + todayStr + ".json";
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+
+    showToast("Data exported");
+  }
+
+  // ---------------------------------------------------------------------
+  // Auto-save to a linked file (File System Access API)
+  //
+  // Lets the user pick a JSON file once; from then on, every change
+  // (new/edited/deleted session, subject, or goal update) is silently
+  // rewritten to that same file — no repeated manual "Export" needed.
+  //
+  // Only supported in Chromium browsers (Chrome, Edge, Opera, Brave) as of
+  // this writing; Safari and Firefox don't implement showSaveFilePicker.
+  // Where unsupported, the row is hidden and manual Export/Import remains
+  // the only path.
+  // ---------------------------------------------------------------------
+  const AUTOSAVE_SUPPORTED = "showSaveFilePicker" in window && "indexedDB" in window;
+  const LINK_DB_NAME = "readingHoursFileLink";
+  const LINK_STORE_NAME = "handles";
+  const LINK_KEY = "linkedFile";
+  const AUTOSAVE_DEBOUNCE_MS = 500;
+
+  let linkedFileHandle = null;
+  let autoSaveTimer = null;
+  let autoSaveInFlight = false;
+  let autoSavePending = false;
+
+  function idbOpen() {
+    return new Promise(function (resolve, reject) {
+      const req = indexedDB.open(LINK_DB_NAME, 1);
+      req.onupgradeneeded = function () {
+        req.result.createObjectStore(LINK_STORE_NAME);
+      };
+      req.onsuccess = function () { resolve(req.result); };
+      req.onerror = function () { reject(req.error); };
+    });
+  }
+
+  function idbSet(key, value) {
+    return idbOpen().then(function (db) {
+      return new Promise(function (resolve, reject) {
+        const tx = db.transaction(LINK_STORE_NAME, "readwrite");
+        tx.objectStore(LINK_STORE_NAME).put(value, key);
+        tx.oncomplete = function () { resolve(); };
+        tx.onerror = function () { reject(tx.error); };
+      });
+    });
+  }
+
+  function idbGet(key) {
+    return idbOpen().then(function (db) {
+      return new Promise(function (resolve, reject) {
+        const tx = db.transaction(LINK_STORE_NAME, "readonly");
+        const req = tx.objectStore(LINK_STORE_NAME).get(key);
+        req.onsuccess = function () { resolve(req.result || null); };
+        req.onerror = function () { reject(req.error); };
+      });
+    });
+  }
+
+  function idbDelete(key) {
+    return idbOpen().then(function (db) {
+      return new Promise(function (resolve, reject) {
+        const tx = db.transaction(LINK_STORE_NAME, "readwrite");
+        tx.objectStore(LINK_STORE_NAME).delete(key);
+        tx.oncomplete = function () { resolve(); };
+        tx.onerror = function () { reject(tx.error); };
+      });
+    });
+  }
+
+  // Checks (and if allowed, silently upgrades) permission on a stored file
+  // handle. requestPermission() only succeeds with an actual UI prompt when
+  // called from within a user-gesture handler (a click) — calling it from
+  // page load without a gesture will just fail quietly, which is fine here
+  // since we fall back to asking the user to click "Reconnect".
+  function queryHandlePermission(handle) {
+    return handle.queryPermission({ mode: "readwrite" });
+  }
+
+  function requestHandlePermission(handle) {
+    return handle.requestPermission({ mode: "readwrite" });
+  }
+
+  function setAutoSaveStatus(text, isWarning) {
+    if (!autoSaveStatusEl) return;
+    autoSaveStatusEl.textContent = text;
+    autoSaveStatusEl.style.color = isWarning ? "#d93025" : "";
+  }
+
+  function refreshLinkButtonLabel(permissionState) {
+    if (!linkFileBtn) return;
+    if (!linkedFileHandle) {
+      linkFileBtn.textContent = "Link File for Auto-Save";
+    } else if (permissionState === "granted") {
+      linkFileBtn.textContent = "Unlink Auto-Save File";
+    } else {
+      linkFileBtn.textContent = "Reconnect Auto-Save File";
+    }
+  }
+
+  function scheduleAutoSave() {
+    if (!linkedFileHandle) return;
+    autoSavePending = true;
+    clearTimeout(autoSaveTimer);
+    autoSaveTimer = setTimeout(writeLinkedFileNow, AUTOSAVE_DEBOUNCE_MS);
+  }
+
+  function writeLinkedFileNow() {
+    if (!linkedFileHandle || autoSaveInFlight) return;
+    autoSaveInFlight = true;
+    autoSavePending = false;
+
+    // Runs after every attempt (success or failure) to release the
+    // in-flight lock and retry if another change queued up meanwhile.
+    // Without this on the failure paths, a failed write could silently
+    // swallow a pending change until the user happened to edit again.
+    function finishAttempt() {
+      autoSaveInFlight = false;
+      if (autoSavePending) scheduleAutoSave();
+    }
+
+    queryHandlePermission(linkedFileHandle).then(function (state) {
+      if (state !== "granted") {
+        refreshLinkButtonLabel(state);
+        setAutoSaveStatus("⚠️ Reconnect needed to keep auto-saving to " + linkedFileHandle.name, true);
+        finishAttempt();
+        return;
+      }
+      const payload = buildExportPayload();
+      const json = JSON.stringify(payload, null, 2);
+      linkedFileHandle.createWritable().then(function (writable) {
+        return writable.write(json).then(function () { return writable.close(); });
+      }).then(function () {
+        setAutoSaveStatus("🔗 Auto-saved to " + linkedFileHandle.name + " · " + new Date().toLocaleTimeString());
+        finishAttempt();
+      }).catch(function (err) {
+        console.error("Auto-save write failed", err);
+        setAutoSaveStatus("⚠️ Auto-save failed — see browser console", true);
+        finishAttempt();
+      });
+    }).catch(function (err) {
+      console.error("Auto-save permission check failed", err);
+      finishAttempt();
+    });
+  }
+
+  function linkNewFile() {
+    window.showSaveFilePicker({
+      suggestedName: "reading-hours-data.json",
+      types: [{ description: "JSON file", accept: { "application/json": [".json"] } }]
+    }).then(function (handle) {
+      linkedFileHandle = handle;
+      return idbSet(LINK_KEY, handle);
+    }).then(function () {
+      refreshLinkButtonLabel("granted");
+      showToast("Linked — auto-saving to " + linkedFileHandle.name);
+      writeLinkedFileNow();
+    }).catch(function (err) {
+      if (err && err.name === "AbortError") return; // user closed the picker
+      console.error("Link file failed", err);
+      showToast("Could not link a file");
+    });
+  }
+
+  function unlinkFile() {
+    linkedFileHandle = null;
+    idbDelete(LINK_KEY).then(function () {
+      refreshLinkButtonLabel(null);
+      setAutoSaveStatus("Not linked — using browser storage only");
+      showToast("Unlinked. Data still auto-saves in this browser.");
+    });
+  }
+
+  function reconnectFile() {
+    requestHandlePermission(linkedFileHandle).then(function (state) {
+      refreshLinkButtonLabel(state);
+      if (state === "granted") {
+        setAutoSaveStatus("🔗 Reconnected to " + linkedFileHandle.name);
+        writeLinkedFileNow();
+      } else {
+        setAutoSaveStatus("⚠️ Permission denied for " + linkedFileHandle.name, true);
+      }
+    }).catch(function (err) {
+      console.error("Reconnect failed", err);
+      showToast("Could not reconnect the file");
+    });
+  }
+
+  function handleLinkButtonClick() {
+    if (!AUTOSAVE_SUPPORTED) {
+      showToast("Auto-save to file isn't supported in this browser");
+      return;
+    }
+    if (!linkedFileHandle) {
+      linkNewFile();
+      return;
+    }
+    queryHandlePermission(linkedFileHandle).then(function (state) {
+      if (state === "granted") {
+        unlinkFile();
+      } else {
+        reconnectFile();
+      }
+    });
+  }
+
+  // On load: restore a previously linked handle (if any) from IndexedDB and
+  // report its current permission state. We only *query* permission here
+  // (no gesture needed) — actually re-requesting it happens when the user
+  // clicks "Reconnect", since that requires a user gesture to show a prompt.
+  function restoreLinkedFileOnLoad() {
+    if (!autoSaveRow) return;
+    if (!AUTOSAVE_SUPPORTED) {
+      autoSaveRow.style.display = "none";
+      return;
+    }
+    idbGet(LINK_KEY).then(function (handle) {
+      if (!handle) {
+        setAutoSaveStatus("Not linked — using browser storage only");
+        return;
+      }
+      linkedFileHandle = handle;
+      return queryHandlePermission(handle).then(function (state) {
+        refreshLinkButtonLabel(state);
+        if (state === "granted") {
+          setAutoSaveStatus("🔗 Linked to " + handle.name);
+        } else {
+          setAutoSaveStatus("⚠️ Click \"Reconnect Auto-Save File\" to resume saving to " + handle.name, true);
+        }
+      });
+    }).catch(function (err) {
+      console.warn("Could not restore linked file handle", err);
+      setAutoSaveStatus("Not linked — using browser storage only");
+    });
+  }
+
+  // Wraps a CSV field in quotes (escaping any internal quotes) whenever it's
+  // needed — i.e. whenever there's a value to write at all, since subject
+  // names/notes may themselves contain commas.
+  function csvQuote(value) {
+    if (!value) return "";
+    return '"' + String(value).replace(/"/g, '""') + '"';
+  }
+
+  // Splits a single CSV line into fields, respecting double-quoted fields
+  // (which may themselves contain commas or escaped "" quotes).
+  function parseCsvLine(line) {
+    const fields = [];
+    let current = "";
+    let inQuotes = false;
+
+    for (let i = 0; i < line.length; i++) {
+      const c = line[i];
+      if (inQuotes) {
+        if (c === '"') {
+          if (line[i + 1] === '"') { current += '"'; i++; }
+          else { inQuotes = false; }
+        } else {
+          current += c;
+        }
+      } else if (c === '"') {
+        inQuotes = true;
+      } else if (c === ",") {
+        fields.push(current);
+        current = "";
+      } else {
+        current += c;
+      }
+    }
+    fields.push(current);
+    return fields;
+  }
+
+  // Finds an existing subject by name (case-insensitive), or null.
+  function findSubjectByName(name) {
+    const lower = String(name || "").trim().toLowerCase();
+    if (!lower) return null;
+    return subjects.find(function (s) { return s.name.toLowerCase() === lower; }) || null;
+  }
+
+  // Finds a subject by name, creating a new one (with a random palette
+  // color) if no match exists yet. Used while importing so subject names
+  // from a file map onto real subjects in this app.
+  function getOrCreateSubjectByName(name) {
+    const existing = findSubjectByName(name);
+    if (existing) return existing;
+    const s = { id: generateId(), name: String(name).trim().slice(0, 40), color: randomNiceColor() };
+    subjects.push(s);
+    return s;
+  }
+
+  // Subject used for legacy imports (old exports with no Subject column)
+  // that don't otherwise map onto one of the user's subjects.
+  function ensureFallbackSubject() {
+    let fb = subjects.find(function (s) { return s.id === "imported-fallback"; });
+    if (!fb) {
+      fb = { id: "imported-fallback", name: "Imported", color: NEUTRAL_COLOR };
+      subjects.push(fb);
+    }
+    return fb;
+  }
+
+  // Parses an uploaded backup file (JSON or CSV) into a
+  // { date: [session, ...] } map, silently skipping malformed rows rather
+  // than failing the whole import over one bad line. Also restores subjects
+  // (with colors) and optionally goalHours when present in a full JSON export.
+  //
+  // Supported shapes:
+  //  - This app's own full JSON export ({ version, subjects, sessions, goalHours })
+  //  - This app's CSV export (Date,Subject,Hours,Note)
+  //  - Legacy single-number-per-day exports (CSV: Date,Hours,Title; or a
+  //    plain {date: hours} JSON map, optionally with a parallel `titles` map)
+  //  - An array of {date, hours, title|note, subject?} rows
+  function parseImportFile(text, filename) {
+    const sessionsOut = {};
+    const trimmed = text.trim();
+    const looksLikeJson = /\.json$/i.test(filename || "") || trimmed.startsWith("{") || trimmed.startsWith("[");
+    let importedGoal = null;
+
+    function addSession(date, subjectName, hours, note, subjectId, createdAt) {
+      if (!isValidDateStr(date)) return;
+      const h = parseFloat(hours);
+      if (isNaN(h) || h < 0 || h > 24) return;
+
+      let subj;
+      if (subjectId && subjects.some(function (s) { return s.id === subjectId; })) {
+        subj = subjects.find(function (s) { return s.id === subjectId; });
+      } else if (subjectName) {
+        subj = getOrCreateSubjectByName(subjectName);
+      } else {
+        subj = ensureFallbackSubject();
+      }
+
+      if (!sessionsOut[date]) sessionsOut[date] = [];
+      sessionsOut[date].push({
+        id: generateId(),
+        subjectId: subj.id,
+        hours: roundTo(h, 2),
+        note: note ? String(note).slice(0, 200) : "",
+        createdAt: createdAt || Date.now()
+      });
+    }
+
+    // Merge subjects from a full JSON export, preserving colors. Matches by
+    // id first, then by name; creates new subjects as needed.
+    function importSubjectsList(list) {
+      if (!Array.isArray(list)) return;
+      list.forEach(function (s) {
+        if (!s || !s.name) return;
+        const name = String(s.name).trim().slice(0, 40);
+        const color = s.color || randomNiceColor();
+        const id = s.id || generateId();
+
+        const byId = subjects.find(function (x) { return x.id === id; });
+        if (byId) {
+          byId.name = name;
+          byId.color = color;
+          return;
+        }
+        const byName = findSubjectByName(name);
+        if (byName) {
+          byName.color = color;
+          return;
+        }
+        subjects.push({ id: id, name: name, color: color });
+      });
+    }
+
+    if (looksLikeJson) {
+      const parsed = JSON.parse(trimmed);
+
+      if (parsed && typeof parsed === "object" && parsed.sessions && typeof parsed.sessions === "object") {
+        // This app's own full export shape (v2).
+        if (parsed.subjects) importSubjectsList(parsed.subjects);
+        if (typeof parsed.goalHours === "number" && parsed.goalHours > 0 && parsed.goalHours <= 24) {
+          importedGoal = parsed.goalHours;
+        }
+        Object.keys(parsed.sessions).forEach(function (date) {
+          if (!isValidDateStr(date)) return;
+          (parsed.sessions[date] || []).forEach(function (sess) {
+            addSession(
+              date,
+              sess.subjectName || sess.subject,
+              sess.hours,
+              sess.note,
+              sess.subjectId,
+              sess.createdAt
+            );
+          });
+        });
+      } else if (Array.isArray(parsed)) {
+        parsed.forEach(function (row) {
+          if (!row) return;
+          addSession(row.date, row.subject || row.subjectName, row.hours, row.note || row.title);
+        });
+      } else if (parsed && typeof parsed === "object") {
+        // Legacy {data, titles} shape or a plain {date: hours} map.
+        const source = (parsed.data && typeof parsed.data === "object") ? parsed.data : parsed;
+        // Avoid treating our own payload keys as dates if sessions was missing.
+        Object.keys(source).forEach(function (date) {
+          if (!isValidDateStr(date)) return;
+          addSession(date, null, source[date], parsed.titles ? parsed.titles[date] : null);
+        });
+      }
+    } else {
+      const lines = trimmed.split(/\r?\n/).filter(function (l) { return l.trim().length > 0; });
+      lines.forEach(function (line, idx) {
+        const cols = parseCsvLine(line);
+        // Skip a header row, old or new ("Date,Hours,Title" / "Date,Subject,Hours,Note").
+        if (idx === 0 && /date/i.test(cols[0] || "") && /(hour|subject)/i.test(cols.slice(1).join(","))) return;
+
+        const date = (cols[0] || "").trim();
+
+        // New format has a non-numeric Subject as the 2nd column; old
+        // format has Hours directly as the 2nd column.
+        if (cols.length >= 4 && cols[1] && isNaN(parseFloat(cols[1]))) {
+          addSession(date, cols[1], cols[2], cols[3]);
+        } else {
+          addSession(date, null, cols[1], cols[2]);
+        }
+      });
+    }
+
+    return { sessions: sessionsOut, goalHours: importedGoal };
+  }
+
+  // Applies parsed import data: either merges it into the existing sessions
+  // (appending to each date's array) or replaces everything. Optionally
+  // restores goalHours from a full JSON export.
+  function performImport(parsed, replace) {
+    const parsedSessions = parsed.sessions || parsed;
+    if (replace) {
+      sessionsData = {};
+    }
+    Object.keys(parsedSessions).forEach(function (date) {
+      if (!sessionsData[date]) sessionsData[date] = [];
+      sessionsData[date] = sessionsData[date].concat(parsedSessions[date]);
+    });
+
+    if (typeof parsed.goalHours === "number" && parsed.goalHours > 0 && parsed.goalHours <= 24) {
+      goalHours = roundTo(parsed.goalHours, 2);
+      saveGoalHours(goalHours);
+    }
+
+    const count = Object.keys(parsedSessions).reduce(function (s, d) { return s + parsedSessions[d].length; }, 0);
+
+    exitEditMode();
+    refreshAll();
+    showToast((replace ? "Data replaced — " : "Data merged — ") + count + (count === 1 ? " session" : " sessions") + " imported");
+  }
+
+  // Confirms with the user (via the shared modal, extended with a Merge
+  // option) before applying an import, consistent with the confirmation
+  // already required for "Clear All Data" and individual deletes.
+  function openImportModal(parsed) {
+    const parsedSessions = parsed.sessions || parsed;
+    const count = Object.keys(parsedSessions).reduce(function (s, d) { return s + parsedSessions[d].length; }, 0);
+    openModal(
+      "Import data",
+      "Found " + count + (count === 1 ? " session" : " sessions") + " in the selected file. " +
+        "Merge adds these to your existing entries. Replace All deletes your current data first.",
+      "Replace All",
+      function () { performImport(parsed, true); closeModal(); },
+      null,
+      { label: "Merge", onClick: function () { performImport(parsed, false); closeModal(); } }
+    );
+  }
+
+  importBtn.addEventListener("click", function () { importFile.click(); });
+
+  importFile.addEventListener("change", function (e) {
+    const file = e.target.files && e.target.files[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = function (ev) {
+      try {
+        const parsed = parseImportFile(String(ev.target.result), file.name);
+        const parsedSessions = parsed.sessions || {};
+        const count = Object.keys(parsedSessions).reduce(function (s, d) { return s + parsedSessions[d].length; }, 0);
+        if (count === 0) {
+          showToast("No valid entries found in that file.", true);
+        } else {
+          // Parsing may have created/updated subjects (with colors); persist
+          // those immediately so they show up correctly however the user
+          // proceeds from here.
+          saveSubjects(subjects);
+          renderSubjectsList();
+          populateSubjectSelect(subjectSelectInput.value);
+          openImportModal(parsed);
+        }
+      } catch (err) {
+        console.error("Import failed", err);
+        showToast("Couldn't read that file — check it's a valid export.", true);
+      }
+      importFile.value = ""; // allow re-selecting the same file later
+    };
+    reader.onerror = function () {
+      showToast("Couldn't read that file.", true);
+      importFile.value = "";
+    };
+    reader.readAsText(file);
+  });
+
+  // ---------------------------------------------------------------------
+  // Wiring
+  // ---------------------------------------------------------------------
+  addBtn.addEventListener("click", addEntry);
+  saveEditBtn.addEventListener("click", saveEdit);
+  cancelEditBtn.addEventListener("click", exitEditMode);
+  clearBtn.addEventListener("click", openClearModal);
+  modalCancelBtn.addEventListener("click", cancelModal);
+  modalConfirmBtn.addEventListener("click", function () {
+    if (typeof pendingConfirmAction === "function") pendingConfirmAction();
+  });
+  modalMergeBtn.addEventListener("click", function () {
+    if (typeof pendingSecondaryAction === "function") pendingSecondaryAction();
+  });
+  // Tapping the dark backdrop (outside the box) also cancels
+  confirmOverlay.addEventListener("click", function (e) {
+    if (e.target === confirmOverlay) cancelModal();
+  });
+
+  // Escape key closes the modal (same as Cancel), and Tab is trapped
+  // inside the dialog while it's open so keyboard focus can't leak out
+  // to the page behind it.
+  document.addEventListener("keydown", function (e) {
+    if (!confirmOverlay.classList.contains("show")) return;
+
+    if (e.key === "Escape") {
+      cancelModal();
+      return;
+    }
+
+    if (e.key === "Tab") {
+      const focusable = getFocusableModalElements();
+      if (focusable.length === 0) return;
+
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+
+      if (e.shiftKey && document.activeElement === first) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault();
+        first.focus();
+      }
+    }
+  });
+
+  exportBtn.addEventListener("click", exportData);
+  if (linkFileBtn) linkFileBtn.addEventListener("click", handleLinkButtonClick);
+
+  // Enter submits from either field: adds a new session, or saves changes
+  // when in edit mode.
+  function handleEnterKey(e) {
+    if (e.key === "Enter") {
+      if (editingSession) { saveEdit(); } else { addEntry(); }
+    }
+  }
+  hoursInput.addEventListener("keydown", handleEnterKey);
+  dateInput.addEventListener("keydown", handleEnterKey);
+  noteInput.addEventListener("keydown", handleEnterKey);
+
+  // Daily goal: gear icon reveals an inline editor; Save validates and
+  // persists, Cancel just hides the row again without changing anything.
+  goalEditBtn.addEventListener("click", function () {
+    goalInput.value = goalHours;
+    goalEditRow.classList.add("show");
+    goalInput.focus();
+  });
+
+  goalCancelBtn.addEventListener("click", function () {
+    goalEditRow.classList.remove("show");
+  });
+
+  goalSaveBtn.addEventListener("click", function () {
+    const value = parseFloat(goalInput.value);
+    if (isNaN(value) || value <= 0) {
+      showToast("Enter a valid goal greater than 0.", true);
+      return;
+    }
+    if (value > 24) {
+      showToast("Daily goal can't exceed 24 hours.", true);
+      return;
+    }
+
+    goalHours = roundTo(value, 2);
+    saveGoalHours(goalHours);
+    goalEditRow.classList.remove("show");
+    renderGoalProgress();
+    showToast("Daily goal updated");
+  });
+
+  // Dismissing the streak-risk banner only silences it for the rest of
+  // today (tracked in sessionStorage), not permanently.
+  streakRiskDismiss.addEventListener("click", function () {
+    sessionStorage.setItem(DISMISS_KEY, toISODate(new Date()));
+    streakRiskBanner.classList.remove("show");
+  });
+
+  // Re-check the streak-risk banner once a minute, so it can appear on its
+  // own as 6 PM passes without requiring the user to interact with the app.
+  setInterval(updateStreakRiskBanner, 60000);
+
+  populateSubjectSelect(subjects.length ? subjects[0].id : null);
+  setTimerButtons();
+  updateTimerDisplay();
+  refreshAll();
+  restoreLinkedFileOnLoad();
+
+})();
+</script>
+
+<script>
+  // Registers the service worker so the app can be installed and run
+  // offline. Wrapped in a feature check since older browsers (and any
+  // non-HTTPS context other than localhost) don't support this API.
+  if ("serviceWorker" in navigator) {
+    window.addEventListener("load", function () {
+      navigator.serviceWorker.register("./sw.js").then(function (reg) {
+        console.log("Service worker registered:", reg.scope);
+      }).catch(function (err) {
+        console.warn("Service worker registration failed:", err);
+      });
+    });
+  }
+</script>
+</body>
+</html>
