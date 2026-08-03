@@ -1,0 +1,550 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<script>
+  // Runs before any CSS is applied so the correct theme is set on <html>
+  // from the very first paint — avoids a flash of the wrong theme (e.g. a
+  // flash of light mode before JS further down the page has a chance to
+  // switch to dark). Kept tiny and defensive: localStorage can throw in
+  // some privacy/incognito modes, so this never blocks page load either way.
+  (function () {
+    try {
+      var THEME_KEY = "readingHoursTheme";
+      var stored = localStorage.getItem(THEME_KEY);
+      var theme = (stored === "light" || stored === "dark")
+        ? stored
+        : ((window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches) ? "dark" : "light");
+      document.documentElement.setAttribute("data-theme", theme);
+    } catch (e) {
+      // localStorage/matchMedia unavailable — leave data-theme unset, CSS
+      // defaults (light) still render fine.
+    }
+  })();
+</script>
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<title>Reading Hours Tracker</title>
+
+<!-- PWA / Home Screen Meta Tags -->
+<meta name="theme-color" content="#1a73e8">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Reading Hours">
+<meta name="description" content="Track your daily reading hours and build a streak.">
+
+<link rel="icon" href="icon-192.png" sizes="192x192" type="image/png">
+<link rel="icon" href="icon-512.png" sizes="512x512" type="image/png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="manifest" href="manifest.json">
+
+<link rel="stylesheet" href="./styles.css">
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script src="https://accounts.google.com/gsi/client" async defer></script>
+</head>
+<body>
+<body>
+
+<div class="app">
+
+  <header>
+    <!-- Icon + label are set by JS (applyTheme) based on the current
+         theme; textContent starts empty here to avoid a mismatched flash
+         before JS runs. -->
+    <div class="header-toolbar">
+      <button class="theme-toggle-btn" id="themeToggleBtn" aria-label="Toggle dark mode" title="Toggle dark mode"></button>
+    </div>
+    <h1 id="headerTitle">📖 Study Hour Tracker</h1>
+    <p id="headerSubtitle">Log study sessions by subject and build your streak</p>
+  </header>
+
+  <!-- Shown when the service worker has installed a newer version of the
+       app while this tab was already open (e.g. left in a background
+       tab). Nothing reloads automatically — an in-progress timer or edit
+       is never interrupted — the user taps Refresh on their own terms. -->
+  <div class="update-banner" id="updateBanner">
+    <span>🔄 A new version is available.</span>
+    <button class="update-refresh-btn" id="updateRefreshBtn">Refresh</button>
+  </div>
+
+  <!-- ===================================================================
+       STUDY section — all existing functionality lives here, unchanged.
+       Shown/hidden via the "active" class, toggled by the bottom nav.
+       =================================================================== -->
+  <div id="studySection" class="app-section active">
+
+  <!-- Google Sign-In / Firestore cloud sync. Signed out by default; the app
+       works entirely offline on local storage either way. Signing in backs
+       up local data to the cloud (first time) and keeps it synced after
+       that, across any device you sign into. -->
+  <div class="card">
+    <div class="cloud-card">
+      <button class="cloud-signin-btn" id="cloudSignInBtn">
+        <svg width="18" height="18" viewBox="0 0 18 18"><path fill="#4285F4" d="M17.64 9.2c0-.64-.06-1.25-.16-1.84H9v3.48h4.84c-.21 1.12-.85 2.07-1.81 2.71v2.26h2.92c1.71-1.58 2.69-3.9 2.69-6.61z"/><path fill="#34A853" d="M9 18c2.43 0 4.47-.8 5.96-2.18l-2.92-2.26c-.81.54-1.84.86-3.04.86-2.34 0-4.32-1.58-5.03-3.7H.96v2.33C2.44 15.98 5.48 18 9 18z"/><path fill="#FBBC05" d="M3.97 10.72c-.18-.54-.28-1.11-.28-1.72s.1-1.18.28-1.72V4.96H.96A8.996 8.996 0 000 9c0 1.45.35 2.83.96 4.04l3.01-2.32z"/><path fill="#EA4335" d="M9 3.58c1.32 0 2.51.45 3.44 1.35l2.59-2.59C13.46.89 11.43 0 9 0 5.48 0 2.44 2.02.96 4.96l3.01 2.33C4.68 5.16 6.66 3.58 9 3.58z"/></svg>
+        Sign in with Google
+      </button>
+      <div class="cloud-user" id="cloudUser">
+        <img id="cloudUserPhoto" alt="">
+        <span class="cloud-user-name" id="cloudUserName"></span>
+      </div>
+      <button class="cloud-signout-btn" id="cloudSignOutBtn">Sign out</button>
+    </div>
+    <p class="cloud-status" id="cloudStatus">Signed out — using this device's storage only</p>
+  </div>
+
+  <!-- Shown only after 6 PM local time when today has no entry yet and the
+       user has an active streak that would break at midnight. Dismissible
+       for the rest of the day via sessionStorage. -->
+  <div class="streak-risk-banner" id="streakRiskBanner">
+    <span id="streakRiskText"></span>
+    <button class="icon-btn" id="streakRiskDismiss" aria-label="Dismiss">✕</button>
+  </div>
+
+  <div class="stats">
+    <div class="stat-box">
+      <div class="stat-value" id="statTotal">0</div>
+      <div class="stat-label">Total Hrs</div>
+    </div>
+    <div class="stat-box">
+      <div class="stat-value" id="statAvg">0</div>
+      <div class="stat-label">Avg / Day</div>
+    </div>
+    <div class="stat-box">
+      <div class="stat-value" id="statStreak">0</div>
+      <div class="stat-label">Day Streak</div>
+      <div class="stat-sub" id="statBestStreak">Best: 0</div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="goal-header">
+      <span class="goal-title">🎯 Today's Goal</span>
+      <button class="icon-btn goal-edit-btn" id="goalEditBtn" aria-label="Edit daily goal">⚙️</button>
+    </div>
+    <div class="progress-track">
+      <div class="progress-fill" id="goalProgressFill"></div>
+    </div>
+    <div class="goal-footer">
+      <span id="goalProgressLabel">0m / 1h</span>
+      <span id="goalProgressPct">0%</span>
+    </div>
+    <div class="goal-edit-row" id="goalEditRow">
+      <div class="form-row">
+        <div class="form-group">
+          <label for="goalInput">Daily goal (hours)</label>
+          <input type="number" id="goalInput" step="0.25" min="0.25" max="24" placeholder="1.0">
+        </div>
+      </div>
+      <div class="form-actions">
+        <button class="btn-cancel" id="goalCancelBtn">Cancel</button>
+        <button class="btn-primary" id="goalSaveBtn">Save Goal</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Subjects: users can create/edit/delete subjects, each with a name and
+       a custom color. Subjects power the "Subject" field on every session.
+       Collapsed by default — most people set subjects up once and rarely
+       need to revisit this card day-to-day. -->
+  <div class="card">
+    <div class="list-header collapsible-toggle" id="subjectsToggle" role="button" tabindex="0" aria-expanded="false">
+      <h2>📚 Subjects</h2>
+      <span class="day-toggle" id="subjectsChevron">▶</span>
+    </div>
+    <div id="subjectsContent" style="display:none;">
+      <div id="subjectsList"></div>
+      <button class="add-subject-btn" id="addSubjectBtn">+ Add Subject</button>
+      <div class="subject-edit-row" id="subjectEditRow">
+        <div class="form-row">
+          <div class="form-group">
+            <label for="subjectNameInput">Name</label>
+            <input type="text" id="subjectNameInput" maxlength="40" placeholder="e.g. Chemistry">
+          </div>
+          <div class="form-group color-group">
+            <label for="subjectColorInput">Color</label>
+            <input type="color" id="subjectColorInput" value="#1a73e8">
+          </div>
+        </div>
+        <div class="form-actions">
+          <button class="btn-cancel" id="subjectCancelBtn">Cancel</button>
+          <button class="btn-primary" id="subjectSaveBtn">Save Subject</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Built-in Timer: uses real timestamps so it stays accurate when the
+       tab is backgrounded or the screen is locked. On Stop it creates a
+       session for today (minimum 1 minute). -->
+  <div class="card" id="timerCard">
+    <div class="list-header">
+      <h2>⏱️ Timer</h2>
+    </div>
+    <!-- Shown whenever notification permission isn't granted yet. The
+         timer still tracks time accurately either way (it's timestamp-
+         based, not dependent on notifications) — but without permission
+         there's no way to confirm it's still running once you lock your
+         phone or switch apps, so this is a strong recommendation rather
+         than silently letting people wonder later. -->
+    <div class="timer-permission-warning" id="timerPermissionWarning">
+      ⚠️ Allow notifications to use the timer reliably — otherwise you won't be able to tell it's still running once you lock your phone or switch apps.
+    </div>
+    <div class="timer-display" id="timerDisplay">00:00:00</div>
+    <div class="form-row">
+      <div class="form-group">
+        <label for="timerSubjectSelect">Subject</label>
+        <select id="timerSubjectSelect"></select>
+      </div>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label for="timerNoteInput">Note <span style="font-weight:400;">(optional)</span></label>
+        <input type="text" id="timerNoteInput" maxlength="200" placeholder="What are you studying?">
+      </div>
+    </div>
+    <div class="timer-controls">
+      <button class="btn-primary timer-btn" id="timerStartBtn">Start</button>
+      <button class="btn-cancel timer-btn" id="timerPauseBtn" style="display:none;">Pause</button>
+      <button class="btn-primary timer-btn" id="timerResumeBtn" style="display:none;">Resume</button>
+      <button class="btn-danger timer-btn" id="timerStopBtn" style="display:none;">Stop</button>
+    </div>
+    <div class="timer-status" id="timerStatus"></div>
+  </div>
+
+  <div class="card">
+    <div class="edit-banner" id="editBanner">Editing session — make changes and save</div>
+    <div class="form-row">
+      <div class="form-group">
+        <label for="dateInput">Date</label>
+        <input type="date" id="dateInput" min="2020-01-01">
+      </div>
+      <div class="form-group">
+        <label for="hoursInput">Hours</label>
+        <input type="number" id="hoursInput" step="0.25" min="0" max="24" placeholder="0.0">
+      </div>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label for="subjectSelectInput">Subject</label>
+        <select id="subjectSelectInput"></select>
+      </div>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label for="noteInput">Note <span style="font-weight:400;">(optional)</span></label>
+        <input type="text" id="noteInput" maxlength="200" placeholder="e.g. Project Hail Mary, ch. 4">
+      </div>
+    </div>
+
+    <button class="btn-primary" id="addBtn">Add Session</button>
+
+    <div class="form-actions" id="editActions" style="display:none;">
+      <button class="btn-cancel" id="cancelEditBtn">Cancel</button>
+      <button class="btn-primary" id="saveEditBtn">Save Changes</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="chart-header">
+      <h2 id="chartTitle">Last 14 Days</h2>
+      <span id="chartRange"></span>
+    </div>
+
+    <div class="chart-type-selector" id="chartTypeSelector">
+      <button class="chart-type-btn" data-chart-type="bar">📊 Bar Chart</button>
+      <button class="chart-type-btn" data-chart-type="line">📈 Line Chart</button>
+    </div>
+
+    <div class="range-selector" id="studyRangeSelector">
+      <button class="range-btn" data-range="7">7 Days</button>
+      <button class="range-btn active" data-range="14">14 Days</button>
+      <button class="range-btn" data-range="30">30 Days</button>
+    </div>
+
+    <div class="chart-wrap" id="chartWrap">
+      <canvas id="readingChart"></canvas>
+    </div>
+    <div class="chart-legend" id="chartLegend"></div>
+  </div>
+
+  <div class="card">
+    <div class="list-header">
+      <h2>All Entries</h2>
+      <span id="entryCount" style="font-size:12px;color:var(--text-muted);"></span>
+    </div>
+    <div id="entriesList"></div>
+    <button class="clear-btn" id="clearBtn">Clear All Data</button>
+
+    <!-- Export / Import / Link-file are now optional extras rather than the
+         primary backup path (Google sign-in + Firestore sync handles that
+         automatically). Tucked behind a toggle so they don't clutter the
+         common case, but still available for anyone who wants an
+         independent local backup or the Merge-import option. -->
+    <div class="list-header local-backup-toggle" id="localBackupToggle" role="button" tabindex="0" aria-expanded="false">
+      <h2 style="font-size:13px;">💾 On-device backup options</h2>
+      <span class="day-toggle" id="localBackupChevron">▶</span>
+    </div>
+    <div id="localBackupContent" style="display:none;">
+      <div class="export-import-row">
+        <button class="export-btn" id="exportBtn">Export Data</button>
+        <button class="export-btn" id="importBtn">Import Data</button>
+      </div>
+      <!-- Hidden native file picker triggered by the Import Data button above -->
+      <input type="file" id="importFile" accept=".json,.csv,application/json,text/csv" style="display:none">
+      <div class="export-import-row" id="autoSaveRow" style="margin-top:8px;">
+        <button class="export-btn" id="linkFileBtn">Link File for Auto-Save</button>
+      </div>
+      <p class="storage-note" id="autoSaveStatus">Not linked — using browser storage only</p>
+      <p class="storage-note">🔒 These are local, on-device options — separate from cloud sync above.</p>
+    </div>
+  </div>
+
+  <footer>Signed in accounts sync automatically. On-device backups above are optional extras.<span class="founder-credit">Founded by Duke</span></footer>
+
+  </div>
+  <!-- ===================================================================
+       End STUDY section
+       =================================================================== -->
+
+  <!-- ===================================================================
+       PERFORMANCE section — exam result logging (Phase 2). Graphs land in
+       Phase 3. Hidden by default; shown via the bottom nav.
+       =================================================================== -->
+  <div id="performanceSection" class="app-section">
+
+    <!-- Subjects: shared with Study — same underlying list, same colors,
+         same add/edit/delete behavior. Collapsed by default, same as
+         Study's Subjects card and the By Subject chart below. -->
+    <div class="card">
+      <div class="list-header collapsible-toggle" id="subjectsTogglePerf" role="button" tabindex="0" aria-expanded="false">
+        <h2>📚 Subjects</h2>
+        <span class="day-toggle" id="subjectsChevronPerf">▶</span>
+      </div>
+      <div id="subjectsContentPerf" style="display:none;">
+        <div id="subjectsListPerf"></div>
+        <button class="add-subject-btn" id="addSubjectBtnPerf">+ Add Subject</button>
+        <div class="subject-edit-row" id="subjectEditRowPerf">
+          <div class="form-row">
+            <div class="form-group">
+              <label for="subjectNameInputPerf">Name</label>
+              <input type="text" id="subjectNameInputPerf" maxlength="40" placeholder="e.g. Chemistry">
+            </div>
+            <div class="form-group color-group">
+              <label for="subjectColorInputPerf">Color</label>
+              <input type="color" id="subjectColorInputPerf" value="#1a73e8">
+            </div>
+          </div>
+          <div class="form-actions">
+            <button class="btn-cancel" id="subjectCancelBtnPerf">Cancel</button>
+            <button class="btn-primary" id="subjectSaveBtnPerf">Save Subject</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Add / edit an exam result. Subject list is shared with Study — no
+         separate subject system, so colors/names stay consistent across
+         both sections. -->
+    <div class="card">
+      <div class="edit-banner" id="examEditBanner">Editing result — make changes and save</div>
+      <div class="form-row">
+        <div class="form-group">
+          <label for="examDateInput">Date</label>
+          <input type="date" id="examDateInput" min="2020-01-01">
+        </div>
+        <div class="form-group">
+          <label for="examScoreInput">Score (%)</label>
+          <input type="number" id="examScoreInput" step="0.1" min="0" max="100" placeholder="0.0">
+        </div>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label for="examSubjectSelect">Subject</label>
+          <select id="examSubjectSelect"></select>
+        </div>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label for="examNameInput">Exam name <span style="font-weight:400;">(optional)</span></label>
+          <input type="text" id="examNameInput" maxlength="60" placeholder="e.g. Midterm 1">
+        </div>
+      </div>
+
+      <button class="btn-primary" id="examAddBtn">Add Result</button>
+
+      <div class="form-actions" id="examEditActions" style="display:none;">
+        <button class="btn-cancel" id="examCancelEditBtn">Cancel</button>
+        <button class="btn-primary" id="examSaveEditBtn">Save Changes</button>
+      </div>
+    </div>
+
+    <!-- Overall Performance: every logged result, chronological. Points are
+         colored by subject so the trend still reads by subject at a
+         glance, even though it's a single continuous line. -->
+    <div class="card">
+      <div class="chart-header">
+        <h2>📈 Overall Performance</h2>
+        <span id="overallChartRange"></span>
+      </div>
+      <div class="range-selector" id="overallRangeSelector">
+        <button class="range-btn" data-range="5">Last 5</button>
+        <button class="range-btn active" data-range="10">Last 10</button>
+        <button class="range-btn" data-range="all">All</button>
+      </div>
+      <div class="chart-wrap" id="overallChartWrap">
+        <canvas id="overallChart"></canvas>
+      </div>
+      <div class="chart-legend" id="overallChartLegend"></div>
+    </div>
+
+    <!-- By Subject: pick a subject, see that subject's score trend on its
+         own, colored with that subject's own assigned color. -->
+    <div class="card">
+      <div class="list-header collapsible-toggle" id="subjectChartToggle" role="button" tabindex="0" aria-expanded="false">
+        <h2>📊 By Subject</h2>
+        <span class="day-toggle" id="subjectChartChevron">▶</span>
+      </div>
+      <div id="subjectChartContent" style="display:none;">
+        <div class="chart-header" style="justify-content:flex-end;">
+          <span id="subjectChartRange"></span>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label for="subjectChartSelect">Subject</label>
+            <select id="subjectChartSelect"></select>
+          </div>
+        </div>
+        <div class="chart-wrap" id="subjectChartWrap">
+          <canvas id="subjectChart"></canvas>
+        </div>
+      </div>
+    </div>
+
+    <!-- All logged results, most recent first. -->
+    <div class="card">
+      <div class="list-header">
+        <h2>📋 All Results</h2>
+        <span id="examResultCount" style="font-size:12px;color:var(--text-muted);"></span>
+      </div>
+      <div id="examResultsList"></div>
+      <button class="clear-btn" id="examClearBtn">Clear All Results</button>
+    </div>
+
+  </div>
+  <!-- ===================================================================
+       End PERFORMANCE section
+       =================================================================== -->
+
+</div>
+
+<!-- Bottom navigation: switches between the Study and Performance
+     sections above. Fixed to the bottom of the viewport, matching the
+     app's max-width so it stays centered on wider screens. -->
+<nav class="bottom-nav" id="bottomNav" role="tablist" aria-label="Sections">
+  <div class="bottom-nav-indicator" id="bottomNavIndicator"></div>
+  <button class="nav-tab active" id="navTabStudy" data-section="study" role="tab" aria-selected="true">
+    <span class="nav-tab-icon" aria-hidden="true">📖</span>
+    <span class="nav-tab-label">Study</span>
+  </button>
+  <button class="nav-tab" id="navTabPerformance" data-section="performance" role="tab" aria-selected="false">
+    <span class="nav-tab-icon" aria-hidden="true">📊</span>
+    <span class="nav-tab-label">Performance</span>
+  </button>
+</nav>
+
+<div class="toast" id="toast"><span class="dot"></span><span id="toastMsg"></span></div>
+
+<!-- Custom confirmation modal (replaces native confirm(), which is
+     unreliable inside standalone/home-screen PWAs and some in-app browsers).
+     Reused for "Clear All Data", "delete session", "delete subject" and
+     import prompts — its title/text/button label are set dynamically in JS. -->
+<div class="modal-overlay" id="confirmOverlay">
+  <div class="modal-box" id="modalBox" role="dialog" aria-modal="true" aria-labelledby="modalTitle" tabindex="-1">
+    <div class="modal-title" id="modalTitle">Clear all data?</div>
+    <div class="modal-text" id="modalText">This will permanently delete all your reading history. This cannot be undone.</div>
+    <div class="modal-actions">
+      <button class="btn-cancel" id="modalCancelBtn">Cancel</button>
+      <!-- Only shown for the "Import data" prompt, as a third choice
+           alongside Cancel and the primary confirm button (Replace All). -->
+      <button class="btn-primary" id="modalMergeBtn" style="display:none;">Merge</button>
+      <button class="btn-danger" id="modalConfirmBtn">Delete All</button>
+    </div>
+  </div>
+</div>
+
+
+<script src="./app.js"></script>
+
+<script>
+  // Registers the service worker so the app can be installed and run
+  // offline. Wrapped in a feature check since older browsers (and any
+  // non-HTTPS context other than localhost) don't support this API.
+  if ("serviceWorker" in navigator) {
+    // Captured before registration/any update can happen, so we can tell
+    // "a new service worker just took over an already-controlled page"
+    // (a real update) apart from "this is the very first visit and a
+    // service worker is claiming this page for the first time" (not an
+    // update — nothing to refresh for).
+    const hadControllerAtLoad = !!navigator.serviceWorker.controller;
+    let updateBannerShown = false;
+
+    window.addEventListener("load", function () {
+      navigator.serviceWorker.register("./sw.js").then(function (reg) {
+        console.log("Service worker registered:", reg.scope);
+      }).catch(function (err) {
+        console.warn("Service worker registration failed:", err);
+      });
+    });
+
+    // Fires when the active service worker controlling this page changes.
+    // Since sw.js calls skipWaiting()/clients.claim(), an update takes
+    // effect almost immediately in the background — but this open tab's
+    // JS/HTML in memory is still the old version until it's reloaded. We
+    // surface that as a banner rather than reloading automatically, so an
+    // in-progress timer or unsaved edit is never interrupted.
+    navigator.serviceWorker.addEventListener("controllerchange", function () {
+      if (updateBannerShown || !hadControllerAtLoad) return;
+      updateBannerShown = true;
+      const banner = document.getElementById("updateBanner");
+      if (banner) banner.classList.add("show");
+    });
+
+    const updateRefreshBtn = document.getElementById("updateRefreshBtn");
+    if (updateRefreshBtn) {
+      updateRefreshBtn.addEventListener("click", function () {
+        window.location.reload();
+      });
+    }
+  }
+</script>
+
+<!-- ---------------------------------------------------------------------
+     Google Sign-In + Firestore cloud sync.
+
+     This runs entirely on top of the app above via window.ReadingHoursApp
+     (getState/setState/onCloudChange) and never touches its internals
+     directly. If this script fails to load (offline, ad blocker, etc.) the
+     app above keeps working normally on local storage alone — signing in
+     is optional.
+
+     Behavior:
+       - Signed out: local storage only (unchanged from before).
+       - Sign in, no cloud data yet for this account: current local data is
+         uploaded as-is (one-time backup/migration).
+       - Sign in, cloud data already exists for this account: it replaces
+         local data (so a second device/browser gets your real history).
+       - While signed in: every local change is pushed to Firestore
+         (debounced) so multiple devices/sessions stay in sync.
+     --------------------------------------------------------------------- -->
+<!-- NOTE: this is an external module script (type="module" src="...").
+     Modules are fetched like any cross-origin resource, and browsers block
+     that fetch under the file:// protocol (e.g. double-clicking index.html
+     instead of serving it). Under file://, this tag will fail to load with
+     a CORS error in the console — the app still works fine on local
+     storage alone (see above), but cloud sign-in/sync will be unavailable
+     until the app is served over http(s):// (any static file server, or
+     the hosting setup used in production). -->
+<script type="module" src="./cloud-sync.js"></script>
+</body>
+</html>
