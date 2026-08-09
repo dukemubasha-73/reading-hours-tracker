@@ -1,0 +1,210 @@
+rules_version = '2';
+
+// =============================================================================
+// Reading Hours Tracker — Firestore Security Rules (Phase 5)
+//
+// Written from scratch. Do NOT assume this matches whatever is currently live
+// in the Firebase console — diff it before deploying.
+//
+// Data model (matches cloud-sync.js Phases 1–4):
+//   users/{uid}/sessions/{sessionId}
+//   users/{uid}/subjects/{subjectId}
+//   users/{uid}/examResults/{resultId}
+//   users/{uid}/meta/settings          <- exactly one doc, this fixed id only
+//
+// Nothing else is expected to exist in this project. Everything not matched
+// below is default-denied (see the bottom of the file), not default-allowed.
+// =============================================================================
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // -------------------------------------------------------------------
+    // Ownership check — the single rule everything else builds on. Only a
+    // signed-in user whose auth uid matches the {userId} path segment may
+    // touch anything under users/{userId}/**. No public read path, no
+    // service-account/admin bypass (this app has no server component
+    // today — if you add one later, add its access explicitly then,
+    // don't assume it's covered here).
+    // -------------------------------------------------------------------
+    function isOwner(userId) {
+      return request.auth != null && request.auth.uid == userId;
+    }
+
+    // A serverTimestamp() sentinel resolves to request.time when these
+    // rules evaluate it. Requiring equality with request.time forces the
+    // client to actually use serverTimestamp() for this field rather than
+    // writing an arbitrary spoofed value.
+    //
+    // IMPORTANT CONTEXT (see chat): _syncedAt is never read back anywhere
+    // in the app — docToRecord() strips it on every read, and conflict
+    // resolution only ever looks at `updatedAt`, a separate field. So
+    // this check is defense-in-depth for a field that's currently inert,
+    // not a fix for a live vulnerability. Keeping it costs nothing.
+    function isServerTimestamp(v) {
+      return v == request.time;
+    }
+
+    // `updatedAt` DOES matter — cloud-sync.js's conflict resolution
+    // (mergeCollection/resolveConflict) compares it directly between
+    // devices to decide which edit wins on a future sign-in merge. It's
+    // entirely client-set (Date.now() in app.js), so nothing stops the
+    // legitimate owner's own client from writing an absurdly-future value
+    // to always "win" a merge against their other devices later. Since
+    // only the owner can write here at all (isOwner already enforces
+    // that), this isn't a cross-user attack surface — at most it's the
+    // owner undermining their own future sync. This bound just keeps the
+    // value sane: a real number, not before year 2000, and not more than
+    // 5 minutes ahead of the server's clock (generous allowance for
+    // ordinary device clock drift, not enough to matter for "who edited
+    // more recently" at any realistic human timescale).
+    function isReasonableUpdatedAt(v) {
+      return v is number
+        && v > 946684800000
+        && v <= request.time.toMillis() + 300000;
+    }
+
+    // ---- sessions/{sessionId} ----
+    // Required: id, date, subjectId, hours. Everything else optional.
+    // No fields beyond this allow-list are accepted at all — a buggy or
+    // malicious client can't stuff arbitrary extra data into a session
+    // doc.
+    function isValidSession(sessionId, data) {
+      return data.keys().hasAll(['id', 'date', 'subjectId', 'hours'])
+        && data.keys().hasOnly(['id', 'date', 'subjectId', 'hours', 'note', 'createdAt', 'updatedAt', '_syncedAt'])
+        // id must match the actual document id — prevents a write whose
+        // embedded id field disagrees with where it's actually stored.
+        && data.id is string && data.id == sessionId
+        && data.date is string && data.date.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$')
+        && data.subjectId is string && data.subjectId.size() > 0 && data.subjectId.size() <= 100
+        // 24h ceiling matches app.js's own per-session cap exactly (a
+        // single logged session can never exceed a full day there
+        // either). Rules can't cheaply enforce the OTHER app.js rule —
+        // that a day's sessions can't SUM past 24h — without reading
+        // every sibling document on every write, which is expensive and
+        // not a real security boundary (it's a data-sanity nicety, not
+        // something a malicious write could exploit). Left client-side
+        // only; noted again in the summary below.
+        && data.hours is number && data.hours >= 0 && data.hours <= 24
+        && (!('note' in data) || (data.note is string && data.note.size() <= 200))
+        && (!('createdAt' in data) || data.createdAt == null || data.createdAt is number)
+        && (!('updatedAt' in data) || isReasonableUpdatedAt(data.updatedAt))
+        && (!('_syncedAt' in data) || isServerTimestamp(data._syncedAt));
+    }
+
+    // ---- subjects/{subjectId} ----
+    // Required: id, name, color. `deleted` is the Phase 1 soft-delete
+    // marker — it's just a normal optional boolean field here, no special
+    // rule treatment needed (a soft-deleted subject is still a perfectly
+    // ordinary write of the same shape, just with deleted:true).
+    function isValidSubject(subjectId, data) {
+      return data.keys().hasAll(['id', 'name', 'color'])
+        && data.keys().hasOnly(['id', 'name', 'color', 'deleted', 'updatedAt', '_syncedAt'])
+        && data.id is string && data.id == subjectId
+        // 40-char cap matches app.js's own name.slice(0, 40). Rules
+        // REJECT rather than truncate — there's no way to silently trim
+        // in a security rule, so an over-length name simply fails the
+        // write (the client should never produce one anyway).
+        && data.name is string && data.name.size() > 0 && data.name.size() <= 40
+        && data.color is string && data.color.matches('^#[0-9A-Fa-f]{6}$')
+        && (!('deleted' in data) || data.deleted is bool)
+        && (!('updatedAt' in data) || isReasonableUpdatedAt(data.updatedAt))
+        && (!('_syncedAt' in data) || isServerTimestamp(data._syncedAt));
+    }
+
+    // ---- examResults/{resultId} ----
+    // Required: id, subjectId, percentage, date.
+    function isValidExamResult(resultId, data) {
+      return data.keys().hasAll(['id', 'subjectId', 'percentage', 'date'])
+        && data.keys().hasOnly(['id', 'subjectId', 'percentage', 'date', 'examName', 'createdAt', 'updatedAt', '_syncedAt'])
+        && data.id is string && data.id == resultId
+        && data.subjectId is string && data.subjectId.size() > 0 && data.subjectId.size() <= 100
+        // 0–100 confirmed against app.js's own examScoreInput bounds and
+        // addExamResult/saveExamEdit validation — not assumed.
+        && data.percentage is number && data.percentage >= 0 && data.percentage <= 100
+        && data.date is string && data.date.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$')
+        && (!('examName' in data) || (data.examName is string && data.examName.size() <= 60))
+        && (!('createdAt' in data) || data.createdAt == null || data.createdAt is number)
+        && (!('updatedAt' in data) || isReasonableUpdatedAt(data.updatedAt))
+        && (!('_syncedAt' in data) || isServerTimestamp(data._syncedAt));
+    }
+
+    // ---- meta/settings ----
+    // cloud-sync.js's metaRecordFromState() always writes all three of
+    // goalHours/milestonesAwarded/chartType together (never a partial
+    // doc), so all three are required, not optional, here.
+    function isValidMeta(data) {
+      return data.keys().hasAll(['goalHours', 'milestonesAwarded', 'chartType'])
+        && data.keys().hasOnly(['goalHours', 'milestonesAwarded', 'chartType', '_syncedAt'])
+        // (0, 24] matches app.js's loadGoalHours/saveGoalHours clamp exactly.
+        && data.goalHours is number && data.goalHours > 0 && data.goalHours <= 24
+        && data.chartType is string && data.chartType in ['bar', 'line']
+        && data.milestonesAwarded is map
+        && data.milestonesAwarded.keys().hasOnly(['total', 'streak'])
+        // Shallow validation only: confirms these are lists and caps
+        // their size as a sanity bound against someone stuffing a huge
+        // array in. Does NOT verify every element is actually a number —
+        // Firestore rules have no per-element loop/type-check over list
+        // contents. Low risk: these are just milestone badge markers,
+        // not data anything else trusts for security decisions. Noted
+        // again in the summary below as a known shallow spot.
+        && data.milestonesAwarded.total is list && data.milestonesAwarded.total.size() <= 20
+        && data.milestonesAwarded.streak is list && data.milestonesAwarded.streak.size() <= 20
+        && (!('_syncedAt' in data) || isServerTimestamp(data._syncedAt));
+    }
+
+    match /users/{userId} {
+      // The parent user doc is unused for DATA — Phase 1 moved everything
+      // into the subcollections below, and nothing should ever WRITE here
+      // again. Read access for the owner is intentionally kept open:
+      // cloud-sync.js's first-sign-in flow reads this exact path once, to
+      // detect (and warn about) data left over from the old pre-Phase-1
+      // whole-doc sync model. Denying read here entirely — which an
+      // earlier draft of these rules did — broke that check outright:
+      // since it runs on every brand-new account's very first sign-in,
+      // it would have silently broken the initial cloud backup for every
+      // new user. Fixed here; see chat for how this was caught.
+      allow read: if isOwner(userId);
+      allow write: if false;
+
+      match /sessions/{sessionId} {
+        allow read: if isOwner(userId);
+        allow delete: if isOwner(userId);
+        allow create, update: if isOwner(userId) && isValidSession(sessionId, request.resource.data);
+      }
+
+      match /subjects/{subjectId} {
+        allow read: if isOwner(userId);
+        allow delete: if isOwner(userId);
+        allow create, update: if isOwner(userId) && isValidSubject(subjectId, request.resource.data);
+      }
+
+      match /examResults/{resultId} {
+        allow read: if isOwner(userId);
+        allow delete: if isOwner(userId);
+        allow create, update: if isOwner(userId) && isValidExamResult(resultId, request.resource.data);
+      }
+
+      match /meta/{docId} {
+        allow read: if isOwner(userId);
+        allow delete: if isOwner(userId);
+        // Only the single 'settings' doc this app ever writes is valid.
+        // Any other doc id under meta/ (typo, future feature nobody told
+        // these rules about, probing) is rejected rather than silently
+        // allowed through with no shape checks at all.
+        allow create, update: if isOwner(userId) && docId == 'settings' && isValidMeta(request.resource.data);
+      }
+    }
+
+    // ---------------------------------------------------------------
+    // Default-deny: any path this app doesn't know about — typos,
+    // an unrelated collection someone else adds to this same Firebase
+    // project later, an accidental top-level write — is rejected rather
+    // than falling through to an implicit allow. This is the difference
+    // between "default-deny" and "default-allow" the brief asked for.
+    // ---------------------------------------------------------------
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
